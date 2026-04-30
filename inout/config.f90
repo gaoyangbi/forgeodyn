@@ -519,10 +519,18 @@ contains
         integer :: hdferr, value
         INTEGER(HID_T) :: file_id, attr_id, space_id, root_id
         INTEGER(HSIZE_T), allocatable :: dims(:)
-        logical :: attr_exists
+        logical :: attr_exists, status
         
         ! Initialize FORTRAN interface.
         CALL h5open_f(hdferr)
+        
+        !Ensure the path directory exists; create it if necessary.
+        inquire(directory=hdf5file, exist=status) 
+        ! only intel fortran have directory option
+    
+        if (.not. status) then
+            call h5fcreate_f(hdf5file, H5F_ACC_TRUNC_F, file_id, hdferr)            
+        end if
         
         ! Open file
         CALL h5fopen_f(hdf5file, H5F_ACC_RDWR_F, file_id, hdferr)  

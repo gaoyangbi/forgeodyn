@@ -1,6 +1,5 @@
-Global seed = 10
-Process : 0, seed = 5229
-Process 0 will process realisations: 0 2 4 6 8 10 12 14  
+Process : 3, seed = 28089
+Process 3 will process realisations: 3 7 11  
 Compute ER was not set in the config file! Assuming True.
 Kalman_norm was not set in the config file! Assuming l2 norm. string: L2
 Data exportation will be done at the end of calculations.
@@ -10,5 +9,3 @@ default take all obs files in observation directory.
 Suppression of high latitude data was not set, assuming no suppression
 Reading100path  timesBUERdata for the priors
 Computing the normalisation matrix for the PCA with energy norm...
-================================================
-Reading and computation of priors/covariances of AugkfAlgo OK !

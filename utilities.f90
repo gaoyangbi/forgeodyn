@@ -46,12 +46,12 @@ module utilities
         real(kind=8), allocatable :: A(:,:), B(:,:), C(:,:), Chol(:,:)
     end type
     
-    type :: set_prior_type ! augkf_algo.f90 line:290 all U, MF, times, ER are stored in this type
+    type :: set_prior_type ! augkf_algo.f90 line:280 all U, MF, times, ER are stored in this type
         real(kind=8), allocatable :: U(:,:), ER(:,:), MF(:,:)
         real(kind=8), allocatable :: times(:)
     end type
     
-    type :: container_type ! augkf_algo.f90 line:477 all Z.T, dZ.T * dt_prior, dt_prior, Nt are stored in this type
+    type :: container_type ! augkf_algo.f90 line:470 all Z.T, dZ.T * dt_prior, dt_prior, Nt are stored in this type
         real(kind=8), allocatable :: z_T(:,:), dz_T(:,:)
         real(kind=8) :: dt_prior
         integer :: Nt
@@ -59,6 +59,18 @@ module utilities
     
     type :: WWT ! common.f90 in subroutine compute_AR_coefs_avg  
         real(kind=8), allocatable :: matrix(:,:)
+    end type
+    
+    type :: legendre_polys_type
+        real(kind=8), allocatable :: thetas(:), weights(:)
+        real(kind=8), allocatable :: MF(:,:,:), U(:,:,:), SV(:,:,:)
+    end type
+    
+    type :: input_core_state_type
+        !real(kind=8), allocatable :: MF(:,:), U(:,:), ER(:,:)
+        real(kind=8), allocatable :: B(:)
+        integer :: Nu2, Nsv, Nb
+        integer :: Lsv, Lu, Lb
     end type
     
 contains
@@ -176,7 +188,10 @@ contains
         
         ! times==========================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)      
+        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
+        
+        !! Start SWMR mode (mpi mode)
+        !call h5fstart_swmr_read_f(file, hdferr)
         
         ! Open the dataset
         CALL h5dopen_f(file, '/times', dset, hdferr)
@@ -220,6 +235,9 @@ contains
         ! Open file
         CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)  
         
+        !! Start SWMR mode (mpi mode)
+        !call h5fstart_swmr_read_f(file, hdferr)
+        
         ! Open the dataset
         CALL h5dopen_f(file, '/MF', dset, hdferr)
         
@@ -261,7 +279,10 @@ contains
         
         ! U ============================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)      
+        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
+        
+        !! Start SWMR mode (mpi mode)
+        !call h5fstart_swmr_read_f(file, hdferr)
         
         ! Open the dataset
         CALL h5dopen_f(file, '/U', dset, hdferr)
@@ -304,7 +325,10 @@ contains
         
         ! ER ===========================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)      
+        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
+        
+        !! Start SWMR mode (mpi mode)
+        !call h5fstart_swmr_read_f(file, hdferr)
         
         ! Open the dataset
         CALL h5dopen_f(file, '/ER', dset, hdferr)

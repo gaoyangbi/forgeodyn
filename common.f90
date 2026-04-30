@@ -4,6 +4,7 @@ module common
     use blas95
     use lapack95
     use f95_precision
+    use legendre
     implicit none
     
     
@@ -56,6 +57,90 @@ contains
             call s1.destroy()
         end do       
 
+    end subroutine    
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine compute_legendre_polys(tmax, Lb, Lu, Lsv, legendre_polys)
+    !*****************************************************************************************************************
+    !"""
+    !Computes the coefficients of Legendre polynomials, first derivative and second derivative of B, U and SV using a wrapped Fortran function.
+    !
+    !:param tmax: Number of angles for computation
+    !:type tmax: int
+    !:param Lb: Max degree of magnetic field
+    !:type Lb: int
+    !:param Lu: Max degree of core flow
+    !:type Lu: int
+    !:param Lsv: Max degree of secular variation
+    !:type Lsv: int
+    !:return: A dictionary containing the angles used for the computations and the Legendre coefs of B, U and SV.
+    !:rtype: dict
+    !"""
+    !*****************************************************************************************************************
+        integer, intent(in) :: tmax, Lb, Lu, Lsv
+        class(legendre_polys_type), intent(out) :: legendre_polys
+        integer :: LLb, LLu, LLsv, i
+        real(kind=8) :: x_i
+        real(kind=8), allocatable :: lp_b(:,:), d_lp_b(:,:), d2_lp_b(:,:)
+        real(kind=8), allocatable :: lp_u(:,:), d_lp_u(:,:), d2_lp_u(:,:)
+        real(kind=8), allocatable :: lp_sv(:,:), d_lp_sv(:,:), d2_lp_sv(:,:)
+        real(kind=8), allocatable :: gauss_points(:), gauss_weights(:), gauss_thetas(:)
+        
+        !# Compute number of coefs
+        LLb = ((Lb + 1) * (Lb + 2)) / 2
+        LLu = ((Lu + 1) * (Lu + 2)) / 2
+        LLsv = ((Lsv + 1) * (Lsv + 2)) / 2
+        
+        !# Init of arrays storing the legendre polynomials, their derivative and second derivative
+        !# For magnetic field
+        allocate(lp_b(LLb, tmax), source=0.0d0)
+        allocate(d_lp_b(LLb, tmax), source=0.0d0)
+        allocate(d2_lp_b(LLb, tmax), source=0.0d0)
+        
+        !# For core flow
+        allocate(lp_u(LLu, tmax), source=0.0d0)
+        allocate(d_lp_u(LLu, tmax), source=0.0d0)
+        allocate(d2_lp_u(LLu, tmax), source=0.0d0)
+        
+        !# For secular variation
+        allocate(lp_sv(LLsv, tmax), source=0.0d0)
+        allocate(d_lp_sv(LLsv, tmax), source=0.0d0)
+        allocate(d2_lp_sv(LLsv, tmax), source=0.0d0)
+        
+        !# Compute Gauss-Legendre quadrature : returns tmax gauss_points in [-1, -1] with their associated weights
+        call gauleg(-1.0d0, 1.0d0, gauss_points, gauss_weights, tmax)
+        
+        !# For each gauss point x_i, compute legendre associated functions at x_i
+        do i = 1, SIZE(gauss_points)
+            x_i = gauss_points(i)
+            !# Last arg of plmbar2 is 1 to have Schmidt quasi-normalisation
+            call plmbar2(lp_b(:,i), d_lp_b(:,i), d2_lp_b(:,i), x_i, Lb, 1)
+            call plmbar2(lp_u(:,i), d_lp_u(:,i), d2_lp_u(:,i), x_i, Lu, 1)
+            call plmbar2(lp_sv(:,i), d_lp_sv(:,i), d2_lp_sv(:,i), x_i, Lsv, 1)
+        end do
+        
+        !# Convert the values used for the polynomial computation in angles
+        allocate(gauss_thetas, source=gauss_points)
+        gauss_thetas = acos(gauss_points)
+        
+        allocate(legendre_polys.thetas, source=gauss_thetas)
+        allocate(legendre_polys.weights, source=gauss_weights)
+        
+        allocate(legendre_polys.MF(3, LLb, tmax))
+        legendre_polys.MF(1, :, :) = lp_b
+        legendre_polys.MF(2, :, :) = d_lp_b
+        legendre_polys.MF(3, :, :) = d2_lp_b
+        
+        allocate(legendre_polys.U(3, LLu, tmax))
+        legendre_polys.U(1, :, :) = lp_u
+        legendre_polys.U(2, :, :) = d_lp_u
+        legendre_polys.U(3, :, :) = d2_lp_u
+        
+        allocate(legendre_polys.SV(3, LLsv, tmax))
+        legendre_polys.SV(1, :, :) = lp_sv
+        legendre_polys.SV(2, :, :) = d_lp_sv
+        legendre_polys.SV(3, :, :) = d2_lp_sv
     end subroutine    
 !==========================================================================================================================
     
@@ -314,6 +399,34 @@ contains
         
         A_forecast = dt_forecast * A - Id
         Chol_forecast = SQRT(dt_forecast) * Chol
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================
+    subroutine compute_AR3_coefs_forecast(A, B, C, Chol, dt_forecast, Ncoef, A_forecast, B_forecast, C_forecast, Chol_forecast)
+    !*****************************************************************************************************************
+    !"""
+    !Compute the forecast coeffcients A, B, C and Chol for AR-3 process
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: A(:,:), B(:,:), C(:,:), Chol(:,:)
+        real(kind=8), intent(in) :: dt_forecast
+        integer, intent(in) :: Ncoef
+        real(kind=8), allocatable :: Id(:,:)
+        real(kind=8), allocatable, intent(out) :: A_forecast(:,:), B_forecast(:,:), C_forecast(:,:) ,Chol_forecast(:,:)
+        
+        !# matrices pour AR3 sch¨¦ma d¨¦centr¨¦
+        allocate(Id(Ncoef, Ncoef))
+        call dlaset('A', Ncoef, Ncoef, 0.0d0, 1.0d0, Id, Ncoef)
+        allocate(A_forecast, source=A)
+        allocate(B_forecast, source=B)
+        allocate(C_forecast, source=C)
+        allocate(Chol_forecast, source=Chol)
+        
+        A_forecast = dt_forecast * A - 3.0d0 * Id
+        B_forecast = (dt_forecast**2) * B - 2.0d0 * dt_forecast * A + 3.0d0 * Id
+        C_forecast = (dt_forecast**3) * C - (dt_forecast**2) * B + dt_forecast * A - Id
+        Chol_forecast = (dt_forecast**(5.0d0/2.0d0)) * Chol
     end subroutine
 !==========================================================================================================================
     

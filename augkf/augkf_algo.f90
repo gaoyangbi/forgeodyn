@@ -5,16 +5,22 @@ module augkf_algo
     use priors
     use pca
     use common
+    use mpi
+    use forecaster
     implicit none
     
     type, extends(GenericAlgo) :: AugkfAlgo
         integer, allocatable :: attributed_models(:)
         integer :: seed
         class(NormedPCAOperator), allocatable :: pcaU_operator
-    
+        class(set_prior_type), allocatable :: avg_prior
+        class(cov_prior_type), allocatable :: cov_prior
+        class(legendre_polys_type), allocatable :: legendre_polys
+        class(AugkfForecasterAR1), allocatable :: forecaster_1
+        class(AugkfForecasterAR3), allocatable :: forecaster_3
     
     contains
-        procedure :: init_AugkfAlgo, check_PCA
+        procedure :: init_AugkfAlgo, check_PCA, create_forecaster
         procedure :: init_corestates, analysis_step, forecast_step
         procedure :: is_equ
         procedure :: extract_prior_and_covariances
@@ -56,7 +62,6 @@ contains
         
         are_all_equal = .true.
         write(10,'(A)') 'testing equalities of algo'
-        
         !# loop on all items of the two instantiation of the classes
         
     contains
@@ -88,6 +93,11 @@ contains
         
         call self.init_GenericAlgo(cfg, nb_realisations)
         self.attributed_models = attributed_models
+        allocate(self.avg_prior, self.cov_prior)
+        call self.extract_prior_and_covariances(self.avg_prior, self.cov_prior)
+        allocate(self.legendre_polys)
+        call compute_legendre_polys(cfg.Nth_legendre, cfg.Lb, cfg.Lu, cfg.Lsv, self.legendre_polys)
+        call self.create_forecaster()
         self.seed = seed
         
    
@@ -105,6 +115,27 @@ contains
             log = .false.
         end if
     end function
+!==========================================================================================================================
+    
+!==========================================================================================================================    
+    subroutine create_forecaster(self)
+    !*****************************************************************************************************************
+    !"""
+    !Factory method to create the forecaster.
+    !
+    !:return: AugkfForecaster
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAlgo), intent(inout) :: self
+        
+        if (trim(self.config.AR_type) == 'AR3') then
+            allocate(self.forecaster_3)
+            call self.forecaster_3.init_AugkfForecasterAR(self.config, self.legendre_polys)
+        else
+            allocate(self.forecaster_1)
+            call self.forecaster_1.init_AugkfForecasterAR(self.config, self.legendre_polys)
+        end if   
+    end subroutine    
 !==========================================================================================================================
 
 !==========================================================================================================================    
@@ -188,7 +219,7 @@ contains
         character(len=50) :: measures(4)
         character(len=50), allocatable :: tag_list(:)
         character(len=50) :: t
-        integer :: i, j, k        
+        integer :: i, j, k, rank, ierr        
         type(cov_prior_type), intent(out) :: cov_prior
         type(set_prior_type), allocatable :: set_prior_obj(:)
         type(set_prior_type), intent(out) :: avg_prior
@@ -204,22 +235,8 @@ contains
         real(kind=8), allocatable :: Uz(:,:), dUz(:,:), d2Uz(:,:), d3Uz(:,:)
         real(kind=8), allocatable :: ERz(:,:), dERz(:,:), d2ERz(:,:), d3ERz(:,:)
         type(container_type), allocatable :: container(:), container2(:)
-        real(kind=8), allocatable :: A(:,:), Chol(:,:), A2(:,:), Chol2(:,:), B_(:,:), C_(:,:)
-        
-        real(kind=8), allocatable :: norm_matrix(:,:), inverse_norm_matrix(:,:), bb(:,:), m1(:,:), m2(:,:), m3(:,:),m4(:,:)
-        type(NormedNzPCAOperator) :: test
-        real(kind=8) :: aa(1,5), cc(1,3)
-        aa = reshape([2.0d0, 3.0d0, 5.0d0, &
-              4.0d0, 6.0d0], [1,5])
-        cc = reshape([2.0d0, 3.0d0, 5.0d0], [1,3])
-        
-        !aa = reshape([6.0d0, 8.0d0, 10.0d0, &
-        !      4.0d0, 10.0d0, 5.0d0, &
-        !      5.0d0, 11.0d0, 7.0d0,&
-        !      8.0d0, 10.0d0, 6.0d0, &
-        !      3.0d0, 7.0d0, 10.0d0, &
-        !      4.0d0, 20.0d0, 12.0d0], [3,6])
-        
+        real(kind=8), allocatable :: A(:,:), Chol(:,:), A2(:,:), Chol2(:,:), B_(:,:), C_(:,:), B_2(:,:), C_2(:,:)
+               
         
         AR_type = self.config.AR_type
         Nz = self.config.Nz()
@@ -240,6 +257,7 @@ contains
         end if
         
         call extract_realisations(self.config.prior_dir, self.config.prior_type, self.config.dt_smoothing, measures, prior_data_obj)
+        
         
         ! # Applying unique function on array to get list of tags
         if (TRIM(self.config.prior_type) == '100path') then
@@ -532,15 +550,30 @@ contains
             call compute_diag_AR1_coefs(cov_prior.U_U, cov_prior.ER_ER, self.config.TauU, self.config.TauE, A, Chol)
             call compute_AR1_coefs_forecast(A, Chol, dt_f, Nz, cov_prior.A, cov_prior.Chol)
         else if (trim(AR_type) == "AR3") then
-            
+            !# compute A, B, C, Chol of U or Z
+            call compute_AR_coefs_avg(container, AR_type, A, B_, C_, Chol)
+            if (self.config.combined_U_ER_forecast == 0) then
+                !# compute A, B, C, Chol of ER
+                call compute_AR_coefs_avg(container2, AR_type, A2, B_2, C_2, Chol2)
+                !# diag block 
+                if (ALLOCATED(matrix_temp)) deallocate(matrix_temp)
+                if (ALLOCATED(matrix_temp2)) deallocate(matrix_temp2)
+                if (ALLOCATED(matrix_2)) deallocate(matrix_2)
+                if (ALLOCATED(matrix_3)) deallocate(matrix_3)
+                allocate(matrix_temp, source=A)
+                allocate(matrix_temp2, source=B_)
+                allocate(matrix_2, source=C_)
+                allocate(matrix_3, source=Chol)
+                call block_diag(matrix_temp, A2, A)
+                call block_diag(matrix_temp2, B_2, B_)
+                call block_diag(matrix_2, C_2, C_)
+                call block_diag(matrix_3, Chol2, Chol)
+            end if
+            !# compute A, B, C, Chol forecast
+            call compute_AR3_coefs_forecast(A, B_, C_, Chol, dt_f, Nz, cov_prior.A, cov_prior.B, cov_prior.C, cov_prior.Chol)
         end if
         write (10,'(A)') '================================================'
-        write (10,'(A)') 'Reading and computation of priors/covariances of AugkfAlgo OK !'
-        !print *, A
-        !print *, SIZE(A, 1), SIZE(A, 2)
-        !print *, Chol(1,:)
-        !print *, SIZE(Chol, 1), SIZE(Chol, 2), Nz
-        
+        write (10,'(A)') 'Reading and computation of priors/covariances of AugkfAlgo OK !'        
     end subroutine    
 !==========================================================================================================================
     

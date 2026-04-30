@@ -1,6 +1,5 @@
-Global seed = 10
-Process : 0, seed = 5229
-Process 0 will process realisations: 0 2 4 6 8 10 12 14  
+Process : 1, seed = 29678
+Process 1 will process realisations: 1 3 5 7 9 11 13  
 Compute ER was not set in the config file! Assuming True.
 Kalman_norm was not set in the config file! Assuming l2 norm. string: L2
 Data exportation will be done at the end of calculations.

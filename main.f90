@@ -324,31 +324,31 @@
     !----------test parts
     print *, "test parts--------------------------------------------"
     
-    measures = ['times', 'B', 'U', 'ER']
-    
-    call extract_realisations('d:\vs\program_fortran\pygeodyn_fortran\pygeodyn_fortran\data\priors\100path', '100path', 0.5d0, measures, aa_test)
-    !print *, aa_test.dim_times, aa_test.dim_MF_1, aa_test.dim_MF_2, aa_test.dim_U_1, aa_test.dim_U_2, aa_test.dim_ER_1, aa_test.dim_ER_2 
-    !print *, aa_test.MF(1, :)
-    !print *, aa_test.tag
-    !print *, aa_test.dt_samp
-    print *, size(aa_test(2).U, 1)
-    !write (*,'(4A)') (trim(measures(i))// '  ', i=1,4) 
-    
+    !measures = ['times', 'B', 'U', 'ER']
     !
-    !n = 10
-    !obs_type_to_use.seed = 20
-    !obs_type_to_use.num_obs = name_
-    !obs_type_to_use.measure_name = name
-    !seed = 56
-    !print *, obs_type_to_use.seed
-    !call get_seeds_for_obs(seed, obs_type_to_use)
-    !print *, obs_type_to_use.seed
-
-    call config_test.init_config(0, 'D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/code_use.conf')
-    call config_test.save_hdf5('D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5')
-    print *, 21 / 2
-    print *, config_test.Nuz()
-    
+    !call extract_realisations('d:\vs\program_fortran\pygeodyn_fortran\pygeodyn_fortran\data\priors\100path', '100path', 0.5d0, measures, aa_test)
+    !!print *, aa_test.dim_times, aa_test.dim_MF_1, aa_test.dim_MF_2, aa_test.dim_U_1, aa_test.dim_U_2, aa_test.dim_ER_1, aa_test.dim_ER_2 
+    !!print *, aa_test.MF(1, :)
+    !!print *, aa_test.tag
+    !!print *, aa_test.dt_samp
+    !print *, size(aa_test(2).U, 1)
+    !!write (*,'(4A)') (trim(measures(i))// '  ', i=1,4) 
+    !
+    !!
+    !!n = 10
+    !!obs_type_to_use.seed = 20
+    !!obs_type_to_use.num_obs = name_
+    !!obs_type_to_use.measure_name = name
+    !!seed = 56
+    !!print *, obs_type_to_use.seed
+    !!call get_seeds_for_obs(seed, obs_type_to_use)
+    !!print *, obs_type_to_use.seed
+    !
+    !call config_test.init_config(0, 'D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/code_use.conf')
+    !call config_test.save_hdf5('D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5')
+    !print *, 21 / 2
+    !print *, config_test.Nuz()
+    !
 
     
     print *, "test parts--------------------------------------------"

@@ -2,6 +2,7 @@ module run
     use corestate
     use augkf_algo
     use config
+    use computer
     implicit none
     private
     !to improve performance in parrallel
@@ -79,6 +80,9 @@ contains
         type(ComputationConfig) :: config_test
         type(cov_prior_type) :: cov_prior
         type(set_prior_type) :: avg_prior
+        type(GenericComputer):: com_test
+        type(input_core_state_type) :: core_test
+        real(kind=8), allocatable :: AbT(:,:)
         ! test part-------------------------
         
          
@@ -194,11 +198,15 @@ contains
         !test parts---------------------------------------------------------------------
         print *, "test parts run--------------------------------------------"
         call config_test.init_config(0, 'D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/code_use.conf')
-        call config_test.save_hdf5('D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5')
+        if (rank==0) then
+            call config_test.save_hdf5("D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5")
+        end if
+        
         call Augkf_test.init_AugkfAlgo(config_test, 500, 500, attributed_models)
-        call Augkf_test.extract_prior_and_covariances(avg_prior, cov_prior)
-        print *, cov_prior.A(2,:)
-        print *, SIZE(cov_prior.A, 1), SIZE(cov_prior.A, 2)
+        call com_test.init_GenericComputer(Augkf_test.config, Augkf_test.legendre_polys)
+        call com_test.compute_Ab(core_test, AbT)
+        print *, 22
+        print *, Augkf_test.legendre_polys.MF(1,2,:)
         print *, "test parts run--------------------------------------------"
         !---------------------------------------------------------------------------
         
