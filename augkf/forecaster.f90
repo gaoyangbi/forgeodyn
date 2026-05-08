@@ -42,7 +42,7 @@ contains
         class(AugkfForecasterAR1), intent(inout) :: self
         class(ComputationConfig), intent(in) :: config
         class(legendre_polys_type), intent(in) :: legendre_polys
-        call self.init_GenericComputer(config, legendre_polys)
+        call self.init_GenericComputer(config, legendre_polys, 0, 0)
         
         !# Bool to deactivate checks on AR processes
         self.Cholesky_AR_check = .false.

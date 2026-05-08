@@ -190,9 +190,6 @@ contains
         ! Open file
         CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
         
-        !! Start SWMR mode (mpi mode)
-        !call h5fstart_swmr_read_f(file, hdferr)
-        
         ! Open the dataset
         CALL h5dopen_f(file, '/times', dset, hdferr)
         
@@ -228,15 +225,12 @@ contains
 
         deallocate(data_1, dims)
         CALL h5dclose_f(dset, hdferr)
-        CALL h5fclose_f(file, hdferr)
+        !CALL h5fclose_f(file, hdferr)
         !===============================================================================
         
         ! MF============================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)  
-        
-        !! Start SWMR mode (mpi mode)
-        !call h5fstart_swmr_read_f(file, hdferr)
+        !CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)  
         
         ! Open the dataset
         CALL h5dopen_f(file, '/MF', dset, hdferr)
@@ -274,15 +268,12 @@ contains
         
         deallocate(data_2, dims)
         CALL h5dclose_f(dset, hdferr)
-        CALL h5fclose_f(file, hdferr)
+        !CALL h5fclose_f(file, hdferr)
         !===============================================================================
         
         ! U ============================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
-        
-        !! Start SWMR mode (mpi mode)
-        !call h5fstart_swmr_read_f(file, hdferr)
+        !CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
         
         ! Open the dataset
         CALL h5dopen_f(file, '/U', dset, hdferr)
@@ -320,15 +311,12 @@ contains
         
         deallocate(data_2, dims)
         CALL h5dclose_f(dset, hdferr)
-        CALL h5fclose_f(file, hdferr)
+        !CALL h5fclose_f(file, hdferr)
         !===============================================================================
         
         ! ER ===========================================================================
         ! Open file
-        CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
-        
-        !! Start SWMR mode (mpi mode)
-        !call h5fstart_swmr_read_f(file, hdferr)
+        !CALL h5fopen_f(trim(path), H5F_ACC_RDONLY_F, file, hdferr)
         
         ! Open the dataset
         CALL h5dopen_f(file, '/ER', dset, hdferr)

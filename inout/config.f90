@@ -441,7 +441,7 @@ contains
         
         t_start_forecast = this.t_start_analysis - this.dt_a * this.N_dta_start_forecast
         t_end_forecast = this.t_end_analysis + this.dt_a * this.N_dta_end_forecast + this.dt_f
-        
+        !print *, "Forecasts will be computed from ", t_start_forecast, " to ", t_end_forecast, " with a timestep of ", this.dt_f
         !# Build time arrays
         !# First forecast at t_start + dt_f
         n = ceiling((t_end_forecast - t_start_forecast) / this.dt_f)
@@ -525,7 +525,7 @@ contains
         CALL h5open_f(hdferr)
         
         !Ensure the path directory exists; create it if necessary.
-        inquire(directory=hdf5file, exist=status) 
+        inquire(file=hdf5file, exist=status) 
         ! only intel fortran have directory option
     
         if (.not. status) then

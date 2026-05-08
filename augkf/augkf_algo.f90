@@ -7,6 +7,7 @@ module augkf_algo
     use common
     use mpi
     use forecaster
+    use analyser
     implicit none
     
     type, extends(GenericAlgo) :: AugkfAlgo
@@ -18,9 +19,10 @@ module augkf_algo
         class(legendre_polys_type), allocatable :: legendre_polys
         class(AugkfForecasterAR1), allocatable :: forecaster_1
         class(AugkfForecasterAR3), allocatable :: forecaster_3
-    
+        class(AugkfAnalyserAR1), allocatable :: analyser_1
+        class(AugkfAnalyserAR3), allocatable :: analyser_3
     contains
-        procedure :: init_AugkfAlgo, check_PCA, create_forecaster
+        procedure :: init_AugkfAlgo, check_PCA, create_forecaster, create_analyser
         procedure :: init_corestates, analysis_step, forecast_step
         procedure :: is_equ
         procedure :: extract_prior_and_covariances
@@ -32,20 +34,24 @@ module augkf_algo
     
 contains
     
-    !function create_augkf_algo(config, nb_realisations, seed, attributed_models) result(res)
-    !!"""
-    !!Factory function that returns the AugKF algo
-    !!
-    !!:param config: Configuration of the algo
-    !!:type config: ComputationConfig
-    !!:param nb_realisations: number of realisations to consider in the algo
-    !!:type nb_realisations: int
-    !!:return: Algorithm object
-    !!:rtype: AugkfAlgo
-    !!"""
-    !    class(ComputationConfig), intent(in) :: config
-    !    return AugkfAlgo(config, nb_realisations, seed, attributed_models)
-    !end function
+    subroutine create_augkf_algo(config, nb_realisations, seed, attributed_models, algo)
+    !"""
+    !Factory function that returns the AugKF algo
+    !
+    !:param config: Configuration of the algo
+    !:type config: ComputationConfig
+    !:param nb_realisations: number of realisations to consider in the algo
+    !:type nb_realisations: int
+    !:return: Algorithm object
+    !:rtype: AugkfAlgo
+    !"""
+        class(ComputationConfig), intent(in) :: config
+        integer, intent(in) :: nb_realisations, seed
+        integer, intent(in) :: attributed_models(:)
+        class(AugkfAlgo), intent(out) :: algo
+        
+        call algo.init_AugkfAlgo(config, nb_realisations, seed, attributed_models)
+    end subroutine
     
 !==========================================================================================================================    
     function is_equ(self, other) result(are_all_equal)
@@ -99,7 +105,7 @@ contains
         call compute_legendre_polys(cfg.Nth_legendre, cfg.Lb, cfg.Lu, cfg.Lsv, self.legendre_polys)
         call self.create_forecaster()
         self.seed = seed
-        
+        call self.create_analyser()
    
     end subroutine    
 !==========================================================================================================================
@@ -137,6 +143,27 @@ contains
         end if   
     end subroutine    
 !==========================================================================================================================
+    
+!==========================================================================================================================    
+    subroutine create_analyser(self)
+    !*****************************************************************************************************************
+    !"""
+    !Factory method to create the analyser.
+    !
+    !:return: AugkfAnalyser
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAlgo), intent(inout) :: self
+        
+        if (trim(self.config.AR_type) == 'AR3') then
+            allocate(self.analyser_3)
+            call self.analyser_3.init_AugkfAnalyserAR(self.config, self.legendre_polys, self.nb_realisations, self.seed)
+        else
+            allocate(self.analyser_1)
+            call self.analyser_1.init_AugkfAnalyserAR(self.config, self.legendre_polys, self.nb_realisations, self.seed)
+        end if   
+    end subroutine    
+!==========================================================================================================================
 
 !==========================================================================================================================    
     subroutine init_corestates(self, random_state)
@@ -152,7 +179,7 @@ contains
     !"""
     !*****************************************************************************************************************
         class(AugkfAlgo), intent(inout) :: self
-        integer, intent(in), optional :: random_state
+        real(kind=8), intent(in) :: random_state
         
         
     end subroutine    

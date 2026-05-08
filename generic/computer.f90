@@ -12,6 +12,7 @@ module computer
         !*****************************************************************************************************************
         class(ComputationConfig), allocatable :: cfg
         class(legendre_polys_type), allocatable :: algo_legendre_polys
+        integer :: algo_nb_realisations, algo_seed
         
     contains
         procedure :: init_GenericComputer
@@ -21,7 +22,7 @@ module computer
     
 contains    
 !==========================================================================================================================  
-    subroutine init_GenericComputer(self, config, legendre_polys)
+    subroutine init_GenericComputer(self, config, legendre_polys, nb_realisations, seed)
     !*****************************************************************************************************************
     !"""
     !Constructor of GenericComputer. Sets the args as members.
@@ -32,10 +33,13 @@ contains
     !*****************************************************************************************************************
         class(ComputationConfig), intent(in) :: config
         class(legendre_polys_type), intent(in) :: legendre_polys
-        class(GenericComputer), intent(inout) :: self        
+        class(GenericComputer), intent(inout) :: self  
+        integer :: nb_realisations, seed
         
         self.cfg = config
         self.algo_legendre_polys = legendre_polys
+        self.algo_nb_realisations = nb_realisations
+        self.algo_seed = seed
     end subroutine    
 !==========================================================================================================================
     

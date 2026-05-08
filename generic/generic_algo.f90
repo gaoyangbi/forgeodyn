@@ -20,7 +20,7 @@ module generic_algo
         subroutine init_corestates_iface(self, random_state)
             import :: GenericAlgo
             class(GenericAlgo), intent(inout) :: self
-            integer, intent(in), optional :: random_state
+            real(kind=8), intent(in) :: random_state
         end subroutine
 
         subroutine analysis_step_iface(self, input_core_state, analysis_time)

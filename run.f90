@@ -3,6 +3,7 @@ module run
     use augkf_algo
     use config
     use computer
+    use observations
     implicit none
     private
     !to improve performance in parrallel
@@ -15,23 +16,25 @@ module run
     
 contains
     
-    function choose_algorithm(algo_name, config_file, nb_models, global_seed, attributed_models, do_shear) result(return_obj)
-        implicit none
+    subroutine choose_algorithm(algo_name, config_file, nb_models, global_seed, attributed_models, do_shear, return_obj)
         integer, intent(in) :: nb_models, do_shear, global_seed
         integer, intent(in) :: attributed_models(:)
-        character(len=100), intent(in) :: config_file, algo_name 
-        integer :: return_obj
+        character(len=*), intent(in) :: config_file, algo_name 
+        type(AugkfAlgo), intent(out) :: return_obj
+        type(ComputationConfig) :: config
         
         if (trim(algo_name) == 'augkf') then
             write(10,'(A)') 'Using augmented state Kalman filter algorithm'
-            return_obj = 1
+            write(* ,'(A)') 'Using augmented state Kalman filter algorithm'
+            call config.init_config(do_shear, config_file)
+            call create_augkf_algo(config, nb_models, global_seed, attributed_models, return_obj)
         else
             print *, 'Algorithm not supported: ', trim(algo_name)
             stop
         end if
         
     
-    end function choose_algorithm
+    end subroutine
 
     subroutine algorithm(output_path, computation_name, config_file, nb_models, do_shear, seed, log_file, logging_level, algo_name)
     !***************************************************************************************************************"""
@@ -62,8 +65,9 @@ contains
         logical status
         character(len=100) :: log_path, str
         integer :: i, val 
-        real(kind=8) :: seed_float
+        real(kind=8) :: seed_float, process_rstate
         integer, allocatable :: attributed_models(:)
+        type(AugkfAlgo) :: algo
         
         
         ! mpi variables---------------------
@@ -76,13 +80,7 @@ contains
         !-----------------------------------
         
         ! test part-------------------------
-        type(AugkfAlgo) :: Augkf_test
-        type(ComputationConfig) :: config_test
-        type(cov_prior_type) :: cov_prior
-        type(set_prior_type) :: avg_prior
-        type(GenericComputer):: com_test
-        type(input_core_state_type) :: core_test
-        real(kind=8), allocatable :: AbT(:,:)
+        
         ! test part-------------------------
         
          
@@ -161,10 +159,12 @@ contains
         call MPI_Bcast(process_seeds, nb_proc, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
         pseed = process_seeds(rank+1) ! rank starts at 0, fortran array at 1
         write(10,'(A, I0, A, I0)') 'Process : ',rank,', seed = ', pseed
+        write(*,'(A, I0, A, I0)') 'Process : ',rank,', seed = ', pseed
         
         ! Initialise the random state using the process seed
         seed_put(1) = pseed
         call RANDOM_SEED(put=seed_put)
+        call RANDOM_NUMBER(process_rstate)
         !----------------------------------------------------------
         
         
@@ -189,24 +189,17 @@ contains
         !---------------------------------------------------------------------------
         
         ! Set algo
-        !print *,  choose_algorithm(algo_name, config_file, nb_models, pseed, attributed_models, do_shear)
-        !call com_config.init_config(do_shear, config_file)
-        print *, attributed_models
+        call choose_algorithm(algo_name, config_file, nb_models, pseed, attributed_models, do_shear, algo)
         !===========================================================================
         
         
         !test parts---------------------------------------------------------------------
-        print *, "test parts run--------------------------------------------"
-        call config_test.init_config(0, 'D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/code_use.conf')
+        print *, "test parts run--------------------------------------------"        
         if (rank==0) then
-            call config_test.save_hdf5("D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5")
+            call algo.config.save_hdf5("D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5")
         end if
+        print *, process_rstate
         
-        call Augkf_test.init_AugkfAlgo(config_test, 500, 500, attributed_models)
-        call com_test.init_GenericComputer(Augkf_test.config, Augkf_test.legendre_polys)
-        call com_test.compute_Ab(core_test, AbT)
-        print *, 22
-        print *, Augkf_test.legendre_polys.MF(1,2,:)
         print *, "test parts run--------------------------------------------"
         !---------------------------------------------------------------------------
         
