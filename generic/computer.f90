@@ -63,7 +63,7 @@ contains
         real(kind=8), allocatable :: lpb(:,:), dlpb(:,:), d2lpb(:,:)
         real(kind=8), allocatable :: lpu(:,:), dlpu(:,:), d2lpu(:,:)
         real(kind=8), allocatable :: lpsv(:,:), dlpsv(:,:), d2lpsv(:,:)
-        
+        real(kind=8), allocatable :: Ab(:,:)
         
         allocate(gauss_th, source=self.algo_legendre_polys.thetas)
         allocate(gauss_weights, source=self.algo_legendre_polys.weights)
@@ -85,13 +85,15 @@ contains
         LLsv = SIZE(lpsv, 1)
         
         !# Function radmats computes A(b)^T
-        allocate(AbT(input_core_state.Nu2, input_core_state.Nsv), source=0.0d0)
-        !call radmats(gauss_th, gauss_weights, lpsv, dlpsv, d2lpsv, &
-                     !lpu, dlpu, d2lpu, lpb, dlpb, d2lpb, &
-                     !AbT, input_core_state.B, &
-                     !input_core_state.Lsv, input_core_state.Lu, input_core_state.Lb, &
-                     !input_core_state.Nsv, input_core_state.Nu2 / 2, input_core_state.Nb, &
-                     !LLsv, LLu, LLb, tmax)
+        allocate(Ab(input_core_state.Nu2, input_core_state.Nsv), source=0.0d0)
+        allocate(AbT(input_core_state.Nsv, input_core_state.Nu2), source=0.0d0)
+        call radmats(gauss_th, gauss_weights, lpsv, dlpsv, d2lpsv, &
+                     lpu, dlpu, d2lpu, lpb, dlpb, d2lpb, &
+                     Ab, input_core_state.B, &
+                     input_core_state.Lsv, input_core_state.Lu, input_core_state.Lb, &
+                     input_core_state.Nsv, input_core_state.Nu2 / 2, input_core_state.Nb, &
+                     LLsv, LLu, LLb, tmax)
+        AbT = TRANSPOSE(Ab)
     end subroutine
 !==========================================================================================================================
     

@@ -1,11 +1,17 @@
-Process : 3, seed = 28089
-Process 3 will process realisations: 3 7 11  
+Process : 3, seed = 46005
+Process 3 will process realisations: 3 7 11 15 19 23 27 31 35 39 43 47 51 55 59 63 67 71 75 79 83 87 91 95 99 103 107 111 115 119 123 127 131 135 139 143 147 151 155 159 163 167 171 175 179 183 187 191 195 199 203 207 211 215 219 223 227 231 235 239 243 247 251 255 259 263 267 271 275 279 283 287 291 295 299 303 307 311 315 319 323 327 331 335 339 343 347 351 355 359 363 367 371 375 379 383 387 391 395 399 403 407 411 415 419 423 427 431 435 439 443 447 451 455 459 463 467 471 475 479 483 487 491 495 499 
+ 
+Using augmented state Kalman filter algorithm
 Compute ER was not set in the config file! Assuming True.
 Kalman_norm was not set in the config file! Assuming l2 norm. string: L2
 Data exportation will be done at the end of calculations.
 Doing last analysis using backward scheme
 Out_format was not set in the config file ! Assuming double precision.
-default take all obs files in observation directory.
-Suppression of high latitude data was not set, assuming no suppression
 Reading100path  timesBUERdata for the priors
 Computing the normalisation matrix for the PCA with energy norm...
+================================================
+Reading and computation of priors/covariances of AugkfAlgo OK !
+Reading chaos_hdf5 data as observations...
+Observations SV are read from D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/data/observations/CHAOS-7/chaos.hdf5
+Observations MF are read from D:/VS/program_Fortran/pygeodyn_fortran/pygeodyn_fortran/data/observations/CHAOS-7/chaos.hdf5
+Finished extracting the observations: MF (  7) and SV (  7)!

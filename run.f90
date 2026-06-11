@@ -15,7 +15,47 @@ module run
     
     
 contains
+!==========================================================================================================================
     
+!==========================================================================================================================
+    subroutine gather_states(corestate, attributed_models, comm, rank, do_bcast)
+    !***************************************************************************************************************"""
+    !Gather corestate to rank 0 (and broadcast to all ranks if do_bcast=True)
+    !
+    !:param corestate: Corestate to be gathered
+    !:type corestate: Cs.Corestate
+    !:param attributed_models: models handled by rank process 
+    !:type attributed_models: 1D numpy array
+    !:param comm: MPI communicator
+    !:type comm: MPI.comm
+    !:param rank: process rank
+    !:type rank: int
+    !:param do_bcast: Controls whether the gathered corestate is broadcasted to all process
+    !:type do_bcast: boolean
+    !*****************************************************************************************************************"""
+        class(CoreState_type), intent(inout) :: corestate
+        integer, intent(in) :: attributed_models(:)
+        integer, intent(in) :: comm, rank
+        logical :: do_bcast
+        integer :: ierr, i
+        
+        !#synchronyze all processes
+        !call MPI_BARRIER(comm, ierr)
+        !#gather from all cores to rank 0
+        ! In this program, we havn't write the gather code in the order of the realisations but in the order of the measures.
+        
+        !#for each measure in corestate
+        do i = 1, size(corestate.measures_, 1)
+            !#synchronyze all processes
+            call MPI_BARRIER(comm, ierr)
+            !#gather from all cores to rank 0
+            
+        end do
+        print *, "gathering done on rank ", rank, SIZE(corestate.measures_(1).measure_data, 1), SIZE(corestate.measures_(1).measure_data, 3)
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================
     subroutine choose_algorithm(algo_name, config_file, nb_models, global_seed, attributed_models, do_shear, return_obj)
         integer, intent(in) :: nb_models, do_shear, global_seed
         integer, intent(in) :: attributed_models(:)
@@ -31,11 +71,12 @@ contains
         else
             print *, 'Algorithm not supported: ', trim(algo_name)
             stop
-        end if
-        
+        end if        
     
     end subroutine
-
+!==========================================================================================================================
+    
+!==========================================================================================================================
     subroutine algorithm(output_path, computation_name, config_file, nb_models, do_shear, seed, log_file, logging_level, algo_name)
     !***************************************************************************************************************"""
     !Runs the chosen algorithm : takes care of running the forecasts, the analysis, of logging and of saving the data
@@ -62,13 +103,17 @@ contains
         implicit none      
         integer, intent(in) :: nb_models, do_shear, seed, logging_level
         character(len=*), intent(in) :: output_path, computation_name, config_file, log_file, algo_name    
-        logical status
+        logical status, log_ 
         character(len=100) :: log_path, str
-        integer :: i, val 
-        real(kind=8) :: seed_float, process_rstate
+        integer :: i, val, i_t, i_analysis , idx_max, j
+        real(kind=8) :: seed_float, process_rstate, ratio, t
         integer, allocatable :: attributed_models(:)
         type(AugkfAlgo) :: algo
-        
+        type(CoreState_type) :: computed_states, forecast_states, analysed_states, misfits
+        type(CoreState_type) :: computed_states_slice
+        class(CoreState_type), allocatable :: forecast_states_slice
+        REAL(kind=8), allocatable :: Z_AR3(:,:,:)
+        integer :: R
         
         ! mpi variables---------------------
         integer :: comm, rank, nb_proc, ierr
@@ -83,10 +128,7 @@ contains
         
         ! test part-------------------------
         
-         
-        ! type ComputationConfig in config.f90-----------------
-        type(ComputationConfig) :: com_config
-        !------------------------------------------------------
+
         
         
         !print *, trim(config_file), trim(algo_name), trim(output_path), trim(computation_name), trim(log_file)
@@ -192,13 +234,154 @@ contains
         call choose_algorithm(algo_name, config_file, nb_models, pseed, attributed_models, do_shear, algo)
         !===========================================================================
         
+        !# Initialization of states is done in each process 
+        !# Each process has its own attributed models so that there is less transfer of arrays
+        call algo.init_corestates(process_rstate, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
         
+        if (first_process()) then
+            write(10,'(A, *(F7.2,1X))') "Forecast will be performed at following times: ", algo.config.t_forecasts
+            write(*,'(A, *(F7.2,1X))') "Forecast will be performed at following times: ", algo.config.t_forecasts
+            
+            write(10,'(A, *(F7.2,1X))') "Analyses will be performed at following times: ", algo.config.t_analyses
+            write(*,'(A, *(F7.2,1X))') "Analyses will be performed at following times: ", algo.config.t_analyses
+        end if
+        
+        !# LAUNCH THE ALGORITHM
+        !# INIT
+        i_t = 0
+        i_analysis = 0
+        ratio = algo.config.dt_a_f_ratio
+        idx_max = size(algo.config.t_forecasts, 1) - 1
+        
+        ! # Loop over all time indices
+        ! # init the core states types
+        allocate(computed_states_slice.measures_, source=computed_states.measures_)
+        allocate(computed_states_slice.max_degrees_, source=computed_states.max_degrees_)         
+        do j = 1, size(computed_states_slice.measures_, 1)
+            deallocate(computed_states_slice.measures_(j).measure_data)
+            allocate(computed_states_slice.measures_(j).measure_data(SIZE(computed_states.measures_(j).measure_data, 1), 1, SIZE(computed_states.measures_(j).measure_data, 3)))
+        end do
+        allocate(forecast_states_slice, source=computed_states_slice)
+        do while (i_t < idx_max)
+            t = algo.config.t_forecasts(i_t+1)
+            
+            !# PREPARE
+            !# Check if obs data is available and if next analysis on mf and/or sv is performed
+            if (trim(algo.config.AR_type) == 'AR3') then
+                call algo.analyser_3.check_if_analysis_data(algo.config, i_analysis, .False.)
+            else 
+                call algo.analyser_1.check_if_analysis_data(algo.config, i_analysis, .False.)
+            end if
+            
+            if (algo.config.last_analysis_backward == 1) then
+                if (ABS(t - algo.config.t_analyses(SIZE(algo.config.t_analyses, 1) - 1)) < algo.config.dt_f / 2.0d0) then
+                    write(10,'(A)') "Preparing states for backward analysis scheme."
+                    write(*,'(A)') "Preparing states for backward analysis scheme."
+                    
+                    if (trim(algo.config.AR_type) == 'AR3') then
+                        call algo.analyser_3.check_if_analysis_data(algo.config, i_analysis, .True.)
+                    else 
+                        call algo.analyser_1.check_if_analysis_data(algo.config, i_analysis, .True.)
+                    end if
+                end if
+            end if
+            
+            !# Adapt forecast range R to eventual analysis and AR type
+            if ((TRIM(algo.config.AR_type) == "AR3")) then
+                if (algo.analyser_3.sv_analysis())then
+                    R = 2*ratio
+                else
+                    R = ratio
+                end if
+            else
+                R = ratio
+            end if
+            
+            if (i_t + R > idx_max) then
+                R = idx_max - i_t
+            end if
+            
+            !# FORECAST
+            do i = 1, R
+                !# Increment i_t
+                i_t = i_t +1
+                t = algo.config.t_forecasts(i_t+1)
+
+                ! # slice computed states for the current time step
+                do j = 1, size(computed_states_slice.measures_, 1)
+                    computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, i_t:i_t, :)
+                end do
+                
+                ! # Compute forecast 
+                if (trim(algo.config.AR_type) == 'AR3') then
+                    !call algo.forecaster_3.parallel_forecast_step_AR3(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states, pseed, i_t, forecast_states)
+                else
+                    call algo.forecaster_1.parallel_forecast_step_AR1(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states_slice, pseed, 1, forecast_states_slice)
+                end if
+                
+                ! # Update the computed core_state array with the forecast result
+                do j = 1, size(computed_states_slice.measures_, 1)
+                    computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :) = forecast_states_slice.measures_(j).measure_data
+                    forecast_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :) = forecast_states_slice.measures_(j).measure_data
+                end do
+            end do
+            
+            !# ANALYSIS
+            if ((trim(algo.config.AR_type) == 'AR3')) then
+                if (algo.analyser_3.sv_analysis()) then
+                    ! # Set i_t back from t_a+ to t_a
+                    i_t = i_t - ratio
+                    t = algo.config.t_forecasts(i_t+1)
+                end if
+            end if
+            
+            !# If at least mf or sv analysis
+            if (trim(algo.config.AR_type) == 'AR3') then
+                log_ = (algo.analyser_3.mf_analysis()) .OR. (algo.analyser_3.sv_analysis())
+            else
+                log_ = (algo.analyser_1.mf_analysis()) .OR. (algo.analyser_1.sv_analysis())
+            end if
+            
+            if (log_) then
+                write(10,'(A, i4, A, F7.2, A)') "Starting analysis #", i_analysis+1, " at time ", t, "..."
+                write(*,'(A, i4, A, F7.2, A)') "Starting analysis #", i_analysis+1, " at time ", t, "..."
+                
+                !# Compute analysis
+                if (trim(algo.config.AR_type) == 'AR3') then
+                    !# Gather computed_states to get all realisations for analysis
+
+                    !# Issue #79
+                    !# Doing backward analysis step for the last analysis
+                    !# Avoiding biased forecast
+                else
+                    do j = 1, size(computed_states_slice.measures_, 1)
+                        computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
+                    end do
+                    call gather_states(computed_states_slice, algo.attributed_models, comm, rank, .true.)
+                end if
+                
+            end if 
+            
+        end do
+        
+        !i_t = 1
+        !allocate(computed_states_slice.measures_, source=computed_states.measures_)
+        !allocate(computed_states_slice.max_degrees_, source=computed_states.max_degrees_)
+        !do j = 1, size(computed_states_slice.measures_, 1)
+        !    deallocate(computed_states_slice.measures_(j).measure_data)
+        !    allocate(computed_states_slice.measures_(j).measure_data(SIZE(computed_states.measures_(j).measure_data, 1), 1, SIZE(computed_states.measures_(j).measure_data, 3)))
+        !    computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, i_t:i_t, :)
+        !end do
+        !allocate(forecast_states_slice, source=computed_states_slice)
+        !call algo.forecaster_1.parallel_forecast_step_AR1(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states_slice, pseed, 1, forecast_states_slice)
+        
+        !print *, forecast_states_slice.measures_(1).measure_data(250, 1, 1)
+        !print *, t, algo.config.t_analyses(SIZE(algo.config.t_analyses, 1) - 1), algo.config.dt_f / 2.0d0
         !test parts---------------------------------------------------------------------
         print *, "test parts run--------------------------------------------"        
         if (rank==0) then
             call algo.config.save_hdf5("D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5")
         end if
-        print *, process_rstate
         
         print *, "test parts run--------------------------------------------"
         !---------------------------------------------------------------------------
@@ -221,5 +404,8 @@ contains
         
         
     end subroutine algorithm
+!==========================================================================================================================
+    
+!==========================================================================================================================
 end module
     

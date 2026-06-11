@@ -8,6 +8,7 @@ module utilities
     use blas95
     use lapack95
     use f95_precision
+    use mpi
     implicit none
     public
     
@@ -46,12 +47,12 @@ module utilities
         real(kind=8), allocatable :: A(:,:), B(:,:), C(:,:), Chol(:,:)
     end type
     
-    type :: set_prior_type ! augkf_algo.f90 line:280 all U, MF, times, ER are stored in this type
+    type :: set_prior_type ! augkf_algo.f90 line: all U, MF, times, ER are stored in this type
         real(kind=8), allocatable :: U(:,:), ER(:,:), MF(:,:)
         real(kind=8), allocatable :: times(:)
     end type
     
-    type :: container_type ! augkf_algo.f90 line:470 all Z.T, dZ.T * dt_prior, dt_prior, Nt are stored in this type
+    type :: container_type ! augkf_algo.f90 line: all Z.T, dZ.T * dt_prior, dt_prior, Nt are stored in this type
         real(kind=8), allocatable :: z_T(:,:), dz_T(:,:)
         real(kind=8) :: dt_prior
         integer :: Nt
@@ -67,14 +68,42 @@ module utilities
     end type
     
     type :: input_core_state_type
-        !real(kind=8), allocatable :: MF(:,:), U(:,:), ER(:,:)
         real(kind=8), allocatable :: B(:)
         integer :: Nu2, Nsv, Nb
         integer :: Lsv, Lu, Lb
     end type
     
+    type :: corestate_measures_type
+        integer :: MF = -1, U = -1, SV = -1, ER = -1, Z = -1
+        integer :: dUdt = -1, d2Udt2 = -1, dERdt = -1, d2ERdt2 = -1
+        integer :: S = -1
+    end type
+    
+    type :: key_measures 
+        character(len=10) :: key
+        real(kind=8), allocatable :: measure_data(:,:,:)
+    end type
+    
+    type :: key_max_degrees 
+        character(len=10) :: key
+        integer :: max_d
+    end type
+    
+    type :: measure_observations_mat
+        real(kind=8), allocatable :: mat(:,:)
+    end type
+    
 contains
-
+!==========================================================================================================================
+    subroutine init_MPI(comm, rank)
+        integer, intent(out) :: comm, rank
+        integer :: nb_proc, ierr
+        comm = MPI_COMM_WORLD
+        call MPI_Comm_size(comm, nb_proc, ierr)
+        call MPI_Comm_rank(comm, rank, ierr)    
+    end subroutine
+!==========================================================================================================================
+    
 !========================================================================================================================== 
     function sum_blackman(Nt) result(blackman_w)
         integer :: Nt,i
@@ -88,6 +117,48 @@ contains
         blackman_w = SUM(w)
     end function
 !==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine randn_mat(x, m, n)
+        implicit none
+        integer, intent(in) :: m, n
+        real(8), allocatable, intent(out) :: x(:,:)
+        REAL(kind=8), allocatable :: temp(:)
+        
+        allocate(temp(m*n), source=0.0d0)
+        call randn_vec(temp, m*n)
+        allocate(x(m, n))
+        x = RESHAPE(temp, [m,n])        
+    end subroutine
+!==========================================================================================================================    
+
+!========================================================================================================================== 
+    subroutine randn_vec(x, n)
+        implicit none
+        integer, intent(in) :: n
+        real(8), allocatable, intent(out) :: x(:)
+        real(8) :: u1, u2
+        integer :: i
+
+        i = 1
+        allocate(x(n))
+        do while (i <= n)
+
+            call random_number(u1)
+            call random_number(u2)
+
+            u1 = max(u1, 1d-12)
+
+            x(i) = sqrt(-2.0d0*log(u1)) * cos(2.0d0*pi*u2)
+
+            if (i+1 <= n) then
+                x(i+1) = sqrt(-2.0d0*log(u1)) * sin(2.0d0*pi*u2)
+            end if
+
+            i = i + 2
+        end do
+    end subroutine
+!========================================================================================================================== 
     
 !==========================================================================================================================
     subroutine init_container(container, zT, dzT, dt_prior, Nt)

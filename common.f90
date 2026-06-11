@@ -5,6 +5,8 @@ module common
     use lapack95
     use f95_precision
     use legendre
+    use omp_lib
+    use mpi
     implicit none
     
     
@@ -432,7 +434,7 @@ contains
     
 !==========================================================================================================================
     subroutine compute_average(X, Nt, mode, result_)
-    !# Perform a convolution of X by a blackman smoothing window of size Nt (NOT A PROPER AVERAGE)
+    !# Perform a convolution of X by a blackman smoothing window of size Nt (NOT A PROPER AVERAGE)    
         real(kind=8), intent(in) :: X(:,:)
         integer, intent(in) :: Nt
         character(len=*), intent(in) :: mode
@@ -440,6 +442,7 @@ contains
         real(kind=8), allocatable :: X_avg(:,:)
         integer :: i, j
         real(kind=8), allocatable :: blackman_w(:)
+        !integer :: comm, rank, nb_proc, ierr
         
         allocate(X_avg(SIZE(X, 1)-Nt+1, SIZE(X, 2)))
         allocate(blackman_w(Nt))
@@ -447,14 +450,78 @@ contains
         X_avg = 0.0d0
         call blackman(Nt, blackman_w)
         
+        !comm = MPI_COMM_WORLD
+        !call MPI_Comm_size(comm, nb_proc, ierr)
+        !call MPI_Comm_rank(comm, rank, ierr)       
+        
         if (TRIM(mode) == 'valid') then
-            do concurrent (i = 1: SIZE(X, 2))
-                do concurrent (j = 1: SIZE(X_avg, 1))
+            !$omp parallel do collapse(2)
+            do i = 1, SIZE(X, 2)
+                do j = 1, SIZE(X_avg, 1)
                     X_avg(j, i) = DOT_PRODUCT(X(j:j+Nt-1,i), blackman_w)
+                    !if (rank==1) print *, "rank=", rank, "threads=", omp_get_max_threads()
                 end do
             end do
+            !$omp end parallel do
         end if
         result_ = X_avg        
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================
+    subroutine ar1_process(X, A, Chol, random_state, check_Cholesky, AR1_result)
+        !"""
+        !Applies an Auto-Regressive process of order 1 to the augmented state Z.
+        !
+        !X1 = - X0 @ A + Chol @ normal_noise
+        !
+        !:param X: quantity on which the AR-1 process will be applied (X0 above)
+        !:type X: 1D numpy.ndarray (dim: Nz)
+        !:param A: AR-1 operator (can be diagonal or dense)
+        !:type A: 2D numpy.ndarray (dim: Nz x Nz)
+        !:param random_state: RandomState to use for normal distribution draw. If None (default), draws will be done with np.random.normal.
+        !:type: None or numpy.random.RandomState
+        !:param check_Cholesky: If True (default), checks that the Cholesky is lower triangular. Setting to False may enhance performance.
+        !:type: bool
+        !:return: vector containing the result of the AR-1 process (X1 above)
+        !:rtype: 1D numpy.ndarray (dim: Nz)
+        !"""
+        real(kind=8), intent(in) :: X(:)
+        real(kind=8), intent(in) :: A(:,:), Chol(:,:)
+        real(kind=8), allocatable, intent(out) :: AR1_result(:)
+        integer, intent(in) :: random_state
+        logical, intent(in) :: check_Cholesky
+        integer :: Ncoef, i, j
+        real(kind=8), allocatable :: normal_noise(:), Chol_test(:,:)
+        
+        Ncoef = SIZE(X, 1)
+        if ((SIZE(A, 1) .ne. Ncoef) .or. (SIZE(A, 2) .ne. Ncoef)) then
+            write (10,'(A, i4, i4, A, i4, i4, A)')  'A matrix in AR-1 should have dimensions (',Ncoef,Ncoef,'). Got', SIZE(A, 1),SIZE(A, 1),' instead.'
+            write (*,'(A, i4, i4, A, i4, i4, A)')  'A matrix in AR-1 should have dimensions (',Ncoef,Ncoef,'). Got', SIZE(A, 1),SIZE(A, 1),' instead.'
+            stop
+        end if
+        allocate(Chol_test, source=Chol)
+        do i = 1, SIZE(Chol_test, 1)
+            do j = i+1, SIZE(Chol_test, 2)
+                Chol_test(i,j) = 0.0d0
+            end do
+        end do
+        if (check_Cholesky)then
+            if (ANY((Chol_test-Chol) /= 0.0d0)) then
+                write (10,'(A)')  'Cholesky matrix supplied in AR-1 is not a lower triangular matrix ! Did you supply the upper Cholesky matrix instead ?'
+                write (*,'(A)') 'Cholesky matrix supplied in AR-1 is not a lower triangular matrix ! Did you supply the upper Cholesky matrix instead ?'
+                stop
+            end if
+        end if     
+        
+        !# Returns samples of the same size as qty from normal distribution with zero mean and unit variance N(0,1)
+        call RANDOM_SEED(put=[random_state])
+        call randn_vec(normal_noise, Ncoef)
+        
+        !build a scaled noise
+        !# Compute qty at t+1 from qty at t and the scaled noise (Euler-Maruyama)
+        allocate(AR1_result(Ncoef), source=0.0d0)
+        AR1_result = MATMUL(-A, X) + MATMUL(Chol, normal_noise)
     end subroutine
 !==========================================================================================================================
     

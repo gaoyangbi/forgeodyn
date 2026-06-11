@@ -8,6 +8,7 @@ module augkf_algo
     use mpi
     use forecaster
     use analyser
+    use corestate
     implicit none
     
     type, extends(GenericAlgo) :: AugkfAlgo
@@ -105,8 +106,7 @@ contains
         call compute_legendre_polys(cfg.Nth_legendre, cfg.Lb, cfg.Lu, cfg.Lsv, self.legendre_polys)
         call self.create_forecaster()
         self.seed = seed
-        call self.create_analyser()
-   
+        call self.create_analyser()   
     end subroutine    
 !==========================================================================================================================
     
@@ -166,7 +166,7 @@ contains
 !==========================================================================================================================
 
 !==========================================================================================================================    
-    subroutine init_corestates(self, random_state)
+    subroutine init_corestates(self, random_state, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
     !*****************************************************************************************************************
     !"""
     !Sets up the corestates needed for the AugKF algorithm.
@@ -180,8 +180,205 @@ contains
     !*****************************************************************************************************************
         class(AugkfAlgo), intent(inout) :: self
         real(kind=8), intent(in) :: random_state
+        type(corestate_measures_type) :: corestate_measures
+        class(key_measures), allocatable :: computed_states_data(:), analysed_states_data(:), misfits_data(:)
+        type(CoreState_type), intent(out) :: computed_states, forecast_states, analysed_states, misfits
+        REAL(kind=8), allocatable, intent(out) :: Z_AR3(:,:,:)
+        character(len=100) :: str_init
         
+        !# Define the measures used for the computation and their number of coeffs
+        corestate_measures.MF = self.config.Nb()
+        corestate_measures.U = self.config.Nu2()
+        corestate_measures.SV = self.config.Nsv()
+        corestate_measures.ER = self.config.Nsv()
+        corestate_measures.Z = self.config.Nz()
         
+        !# Add derivatives needed to AR3 to measures
+        if (TRIM(self.config.AR_type) == "AR3") then
+            corestate_measures.dUdt = self.config.Nu2()
+            corestate_measures.d2Udt2 = self.config.Nu2()
+            corestate_measures.dERdt = self.config.Nsv()
+            corestate_measures.d2ERdt2 = self.config.Nsv()
+        end if
+        
+        !# Add shear measure ('S') if do_shear = 1
+        if (self.config.do_shear == 1) then
+            corestate_measures.S = self.config.Nu2()
+        end if
+        
+        if ((TRIM(self.config.AR_type) == "AR3") .and.(self.config.do_shear == 1)) then
+            allocate(computed_states_data(10))
+            allocate(analysed_states_data(SIZE(computed_states_data)))
+            
+            computed_states_data(1).key = 'MF'
+            analysed_states_data(1).key = 'MF'
+            allocate(computed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.MF), source = 0.0d0)
+            allocate(analysed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.MF), source = 0.0d0)
+            computed_states_data(2).key = 'U'
+            analysed_states_data(2).key = 'U'
+            allocate(computed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.U), source = 0.0d0)
+            allocate(analysed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.U), source = 0.0d0)
+            computed_states_data(3).key = 'SV'
+            analysed_states_data(3).key = 'SV'
+            allocate(computed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.SV), source = 0.0d0)
+            allocate(analysed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.SV), source = 0.0d0)
+            computed_states_data(4).key = 'ER'
+            analysed_states_data(4).key = 'ER'
+            allocate(computed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.ER), source = 0.0d0)
+            allocate(analysed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.ER), source = 0.0d0)
+            computed_states_data(5).key = 'Z'
+            analysed_states_data(5).key = 'Z'
+            allocate(computed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.Z), source = 0.0d0)
+            allocate(analysed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.Z), source = 0.0d0)
+            computed_states_data(6).key = 'dUdt'
+            analysed_states_data(6).key = 'dUdt'
+            allocate(computed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.dUdt), source = 0.0d0)
+            allocate(analysed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.dUdt), source = 0.0d0)
+            computed_states_data(7).key = 'd2Udt2'
+            analysed_states_data(7).key = 'd2Udt2'
+            allocate(computed_states_data(7).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.d2Udt2), source = 0.0d0)
+            allocate(analysed_states_data(7).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.d2Udt2), source = 0.0d0)
+            computed_states_data(8).key = 'dERdt'
+            analysed_states_data(8).key = 'dERdt'
+            allocate(computed_states_data(8).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.dERdt), source = 0.0d0)
+            allocate(analysed_states_data(8).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.dERdt), source = 0.0d0)
+            computed_states_data(9).key = 'd2ERdt2'
+            analysed_states_data(9).key = 'd2ERdt2'
+            allocate(computed_states_data(9).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.d2ERdt2), source = 0.0d0)
+            allocate(analysed_states_data(9).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.d2ERdt2), source = 0.0d0)
+            computed_states_data(10).key = 'S'
+            analysed_states_data(10).key = 'S'
+            allocate(computed_states_data(10).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.S), source = 0.0d0)
+            allocate(analysed_states_data(10).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.S), source = 0.0d0)
+        elseif ((TRIM(self.config.AR_type) == "AR3") .and.(self.config.do_shear == 0)) then
+            allocate(computed_states_data(9))
+            allocate(analysed_states_data(SIZE(computed_states_data)))
+            
+            computed_states_data(1).key = 'MF'
+            analysed_states_data(1).key = 'MF'
+            allocate(computed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.MF), source = 0.0d0)
+            allocate(analysed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.MF), source = 0.0d0)
+            computed_states_data(2).key = 'U'
+            analysed_states_data(2).key = 'U'
+            allocate(computed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.U), source = 0.0d0)
+            allocate(analysed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.U), source = 0.0d0)
+            computed_states_data(3).key = 'SV'
+            analysed_states_data(3).key = 'SV'
+            allocate(computed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.SV), source = 0.0d0)
+            allocate(analysed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.SV), source = 0.0d0)
+            computed_states_data(4).key = 'ER'
+            analysed_states_data(4).key = 'ER'
+            allocate(computed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.ER), source = 0.0d0)
+            allocate(analysed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.ER), source = 0.0d0)
+            computed_states_data(5).key = 'Z'
+            analysed_states_data(5).key = 'Z'
+            allocate(computed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.Z), source = 0.0d0)
+            allocate(analysed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.Z), source = 0.0d0)
+            computed_states_data(6).key = 'dUdt'
+            analysed_states_data(6).key = 'dUdt'
+            allocate(computed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.dUdt), source = 0.0d0)
+            allocate(analysed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.dUdt), source = 0.0d0)
+            computed_states_data(7).key = 'd2Udt2'
+            analysed_states_data(7).key = 'd2Udt2'
+            allocate(computed_states_data(7).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.d2Udt2), source = 0.0d0)
+            allocate(analysed_states_data(7).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.d2Udt2), source = 0.0d0)
+            computed_states_data(8).key = 'dERdt'
+            analysed_states_data(8).key = 'dERdt'
+            allocate(computed_states_data(8).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.dERdt), source = 0.0d0)
+            allocate(analysed_states_data(8).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.dERdt), source = 0.0d0)
+            computed_states_data(9).key = 'd2ERdt2'
+            analysed_states_data(9).key = 'd2ERdt2'
+            allocate(computed_states_data(9).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.d2ERdt2), source = 0.0d0)
+            allocate(analysed_states_data(9).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.d2ERdt2), source = 0.0d0)
+        elseif ((TRIM(self.config.AR_type) .ne. "AR3") .and.(self.config.do_shear == 1)) then
+            allocate(computed_states_data(6))
+            allocate(analysed_states_data(SIZE(computed_states_data)))
+            
+            computed_states_data(1).key = 'MF'
+            analysed_states_data(1).key = 'MF'
+            allocate(computed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.MF), source = 0.0d0)
+            allocate(analysed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.MF), source = 0.0d0)
+            computed_states_data(2).key = 'U'
+            analysed_states_data(2).key = 'U'
+            allocate(computed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.U), source = 0.0d0)
+            allocate(analysed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.U), source = 0.0d0)
+            computed_states_data(3).key = 'SV'
+            analysed_states_data(3).key = 'SV'
+            allocate(computed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.SV), source = 0.0d0)
+            allocate(analysed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.SV), source = 0.0d0)
+            computed_states_data(4).key = 'ER'
+            analysed_states_data(4).key = 'ER'
+            allocate(computed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.ER), source = 0.0d0)
+            allocate(analysed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.ER), source = 0.0d0)
+            computed_states_data(5).key = 'Z'
+            analysed_states_data(5).key = 'Z'
+            allocate(computed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.Z), source = 0.0d0)
+            allocate(analysed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.Z), source = 0.0d0)
+            computed_states_data(6).key = 'S'
+            analysed_states_data(6).key = 'S'
+            allocate(computed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.S), source = 0.0d0)
+            allocate(analysed_states_data(6).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.S), source = 0.0d0)
+        elseif ((TRIM(self.config.AR_type) .ne. "AR3") .and.(self.config.do_shear == 0)) then
+            allocate(computed_states_data(5))
+            allocate(analysed_states_data(SIZE(computed_states_data)))
+            
+            computed_states_data(1).key = 'MF'
+            analysed_states_data(1).key = 'MF'
+            allocate(computed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.MF), source = 0.0d0)
+            allocate(analysed_states_data(1).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.MF), source = 0.0d0)
+            computed_states_data(2).key = 'U'
+            analysed_states_data(2).key = 'U'
+            allocate(computed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.U), source = 0.0d0)
+            allocate(analysed_states_data(2).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.U), source = 0.0d0)
+            computed_states_data(3).key = 'SV'
+            analysed_states_data(3).key = 'SV'
+            allocate(computed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.SV), source = 0.0d0)
+            allocate(analysed_states_data(3).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.SV), source = 0.0d0)
+            computed_states_data(4).key = 'ER'
+            analysed_states_data(4).key = 'ER'
+            allocate(computed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.ER), source = 0.0d0)
+            allocate(analysed_states_data(4).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.ER), source = 0.0d0)
+            computed_states_data(5).key = 'Z'
+            analysed_states_data(5).key = 'Z'
+            allocate(computed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_forecasts(), corestate_measures.Z), source = 0.0d0)
+            allocate(analysed_states_data(5).measure_data(size(self.attributed_models), self.config.nb_analyses(), corestate_measures.Z), source = 0.0d0)
+        end if
+        
+        !# Build the array of computed states and analysed_states
+        call computed_states.init_CoreState(computed_states_data)
+        call analysed_states.init_CoreState(analysed_states_data)
+        
+        !# Initialize the core state at t=0
+        if (trim(self.config.core_state_init) == 'from_file') then
+            call computed_states.initialise_from_file(self.config, self.attributed_models, Z_AR3)
+            str_init = self.config.init_file
+        else
+            if (trim(self.config.AR_type) == "AR3") then
+                call computed_states.initialise_from_noised_priors(random_state, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_3, self.pcaU_operator, Z_AR3)
+            else
+                call computed_states.initialise_from_noised_priors(random_state, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_1, self.pcaU_operator, Z_AR3)
+            end if    
+            str_init = 'normal draw around average priors'
+        end if
+        
+        write(10, '(A,A)') 'Computed states initialised from ', TRIM(str_init)
+        write(*, '(A,A)') 'Computed states initialised from ', TRIM(str_init)
+        
+        !# Create the array storing the result of only forecasts (also copies the value at t=0)
+        forecast_states = computed_states
+        
+        !# Create the CoreState (1 realisation and 1 coef (max_degree forced to 0)) storing the misfits of analyses
+        allocate(misfits_data(2))
+        
+        misfits_data(1).key = 'MF'
+        allocate(misfits_data(1).measure_data(1, self.config.nb_analyses(), 1), source = 0.0d0)
+        misfits_data(2).key = 'SV'
+        allocate(misfits_data(2).measure_data(1, self.config.nb_analyses(), 1), source = 0.0d0)
+        call misfits.init_CoreState(misfits_data)        
+        misfits.max_degrees_(1).max_d = 0
+        misfits.max_degrees_(2).max_d = 0
+        write(10, '(A)') "AugKF CoreStates ready !"
+        write(*, '(A)') "AugKF CoreStates ready !"
     end subroutine    
 !==========================================================================================================================
     

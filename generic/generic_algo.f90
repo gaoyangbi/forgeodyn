@@ -1,7 +1,6 @@
 module generic_algo
     use utilities
     use config
-    
     implicit none
     
     type, abstract :: GenericAlgo
@@ -17,10 +16,13 @@ module generic_algo
     end type 
     
     abstract interface
-        subroutine init_corestates_iface(self, random_state)
+        subroutine init_corestates_iface(self, random_state, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
+            use corestate
             import :: GenericAlgo
             class(GenericAlgo), intent(inout) :: self
             real(kind=8), intent(in) :: random_state
+            type(CoreState_type), intent(out) :: computed_states, forecast_states, analysed_states, misfits
+            REAL(kind=8), allocatable, intent(out) :: Z_AR3(:,:,:)
         end subroutine
 
         subroutine analysis_step_iface(self, input_core_state, analysis_time)

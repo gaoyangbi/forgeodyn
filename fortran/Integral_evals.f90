@@ -42,7 +42,7 @@ contains
         integer, intent(in) :: l1,l2,l3,n1,n2,n3,nn1,nn2,nn3,tmax
 
         ! F2PY: Adding intent(out) to 'Ab' removes it from the list of arg and makes it returned instead !
-        real*8, dimension(2*n2, n1) :: Ab
+        real*8, dimension(2*n2, n1), intent(out) :: Ab
         real*8, dimension(n3), intent(in) :: g
         real*8, dimension(n1) :: rs1, rt1, rs2, rt2, eqwts
         complex(kind=8), dimension(2*tmax,0:l2) :: eisph
@@ -118,7 +118,7 @@ contains
                       enddo
                    enddo
                 enddo
-
+                
                 call ast2h(at(1,1,1,1), tmax, pmax, rt1, l1, gauth, gauwt, p1)
                 call ast2h(as(1,1,1,1), tmax, pmax, rs1, l1, gauth, gauwt, p1)
                 call ast2h(at(1,1,1,2), tmax, pmax, rt2, l1, gauth, gauwt, p1)
@@ -425,7 +425,7 @@ contains
             ! SLICE F (TH, 0:FM-1) INTO FTF (0:FM-1) FOR FFT
             ! LH: Possible bug here (fails with flag -fcheck=bounds):
             ! We try to make an array of size FM fit into a hard coded size of 256...
-            FTF(:) = F(TH, :)
+            FTF(0:FM-1) = F(TH, :)
 
             call FOUR1(FTF, FM, 1)
 
