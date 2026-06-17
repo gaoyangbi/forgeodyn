@@ -5,6 +5,7 @@ module analyser
     use observations
     use, intrinsic :: ieee_arithmetic
     use config
+    use corestate
     implicit none
     
     
@@ -21,7 +22,8 @@ module analyser
     contains
         procedure :: init_AugkfAnalyserAR, invalid_misfits
         procedure :: extract_observations, check_if_analysis_data
-        procedure :: sv_analysis, mf_analysis
+        procedure :: sv_analysis, mf_analysis, analysis_step, analyse_B
+        procedure :: remove_small_correlations
     end type AugkfAnalyserAR1
     
     type, extends(AugkfAnalyserAR1),public :: AugkfAnalyserAR3
@@ -293,5 +295,201 @@ contains
     end subroutine check_if_analysis_data
 !==========================================================================================================================
 
+!========================================================================================================================== 
+    subroutine analysis_step(self, input_core_state, algo_cfg, nb_realisations)
+    !*****************************************************************************************************************
+    !""" Does the analysis at time t on the B and Z=[UE] part of the input_core_state.
+    !Updates SV = A(B)U - ER in consequence.
+    !
+    !:param input_core_state: Core state at time t
+    !:type input_core_state: corestates.CoreState (dim: nb_realisations x Ncorestate)
+    !:return: the analysed core state
+    !:rtype: corestates.CoreState (dim: nb_realisations x Ncorestate)
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAnalyserAR1), intent(in) :: self
+        class(CoreState_type), intent(in) :: input_core_state
+        class(ComputationConfig), intent(in) :: algo_cfg
+        integer, intent(in) :: nb_realisations
+        class(CoreState_type), allocatable :: ana_core_state
+        integer :: i, n_rea, n_t, n_coef, nprocs, rank, ierr, comm
+        
+        !# copy core state
+        allocate(ana_core_state, source=input_core_state)        
+        call MPI_Comm_size(MPI_COMM_WORLD, nprocs, ierr)
+        call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+        
+        !# if no analysis
+        if (.not. self.sv_analysis() .and. .not. self.mf_analysis()) then 
+            do i = 1, size(ana_core_state.measures_, 1)
+                deallocate(ana_core_state.measures_(i).measure_data)
+                n_rea = SIZE(ana_core_state.measures_(i).measure_data, 1)
+                n_t = SIZE(ana_core_state.measures_(i).measure_data, 2)
+                n_coef = SIZE(ana_core_state.measures_(i).measure_data, 3)
+                allocate(ana_core_state.measures_(i).measure_data(n_rea/nprocs, n_t, n_coef))
+                ana_core_state.measures_(i).measure_data = input_core_state.measures_(i).measure_data(rank*n_rea/nprocs+1:(rank+1)*n_rea/nprocs, :, :)
+            end do
+            
+            print *, "No analysis performed at this step, returning the input core state as analysed core state!"
+        end if
+        
+        if (self.mf_analysis()) then
+            !# perform MF analysis
+            call self.analyse_B(ana_core_state, algo_cfg, nb_realisations)
+        end if
+        
+        
+        !print *, "rank", rank, ana_core_state.measures_(3).measure_data(1,1,1), input_core_state.measures_(3).measure_data(1,1,1)
+    end subroutine
+!==========================================================================================================================
     
+!========================================================================================================================== 
+    subroutine analyse_B(self, input_core_state, algo_cfg, nb_realisations)
+    !*****************************************************************************************************************
+    !"""
+    !Returns the analysed data for B by a BLUE given the observations.
+    !
+    !:param input_core_state: NumPy array containing the coefficient data of B
+    !:type input_core_state: np.array (dim: nb_realisations x Nb)
+    !:param mf_X: Observation data to use for the BLUE
+    !:type mf_X: Observation
+    !:param mf_H: Observation matrix to use for the BLUE
+    !:type mf_H: Observation
+    !:param mf_Rxx: Observation error to use for the BLUE
+    !:type mf_Rxx: Observation
+    !:return: NumPy array containing the analysed coefficient data of B
+    !:rtype: np.array (dim: nb_realisations x Nb)
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAnalyserAR1), intent(in) :: self
+        class(CoreState_type), intent(inout) :: input_core_state
+        class(ComputationConfig), intent(in) :: algo_cfg
+        integer, intent(in) :: nb_realisations
+        REAL(kind=8), allocatable :: analysed_B(:, :)
+        class(measure_observations_mat), allocatable :: mf_X(:), Hb(:), Rbb(:)
+        REAL(KIND=8), allocatable :: Pbb_forecast(:,:)
+        
+        allocate(mf_X, source=self.mf_X)
+        !# obs operator
+        allocate(Hb, source=self.mf_H)
+        !# obs error
+        allocate(Rbb, source=self.mf_Rxx)
+        !# compute Pbb from B state
+        call self.remove_small_correlations(input_core_state.measures_(1).measure_data(:,1,:), 1.0d-10, algo_cfg, Pbb_forecast)
+        !# Updates the B part of the core_state by the result of the Kalman filter for each model
+        allocate(analysed_B(nb_realisations, algo_cfg.Nb()))
+        analysed_B = 0.0d0
+        
+        if (TRIM(algo_cfg.kalman_norm) == 'l2') then  !  # for non least square norm, iteration are needed
+            
+        else if (TRIM(algo_cfg.kalman_norm) == 'huber') then
+            
+        else
+            
+        end if            
+        
+        print *, SIZE(Hb, 1), SIZE(Rbb, 1)
+    end subroutine
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine remove_small_correlations(self, input_core_state_matrix, eps, algo_cfg, result_)
+    !*****************************************************************************************************************
+    !"""
+    !Apply the graphical lasso to the correlation matrix. The correlation matrix is computed from
+    !the covariance matrix, either Pzz or Pbb in practice, with C[i, j] = P[i, j] / (P[i, i] P[j, j]).
+    !Warning: In some cases, some variance elements can be zero, for instance if the initialisation
+    !parameter, core_state_init, is set to constant. Then the correlation matrix cannot be computed
+    !and the Glasso is not applied.
+    !
+    !If the glasso parameter, self.cfg.remove_spurious, is set to 0 (np.inf), then the resp. diagonal (empirical)
+    !covariance matrix is returned.
+    !Otherwise the glasso is applied on the correlation matrix.
+    !
+    !:param input_core_state: Corestate which can either be Z or B,
+    !                            at a given time for all realizations (dim: nb_realisations x Ncorestate, matrix)
+    !:param eps: threshold that determines if a value should be considered as null. During the division to
+    !            get the correlation matrix, null values are replaced by eps
+    !:type eps: float
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAnalyserAR1), intent(in) :: self
+        real(kind=8), intent(in) :: input_core_state_matrix(:,:)
+        real(kind=8), intent(in) :: eps
+        class(ComputationConfig), intent(in) :: algo_cfg
+        real(kind=8), allocatable, intent(out) :: result_(:, :)
+        real(kind=8), allocatable :: diag_A(:)
+        real(kind=8), allocatable :: P_forecast(:,:), D_(:,:), C_forecast(:,:)
+        integer :: n, maxIt, msg, warm, info
+        real(kind=8) :: thr
+        real(kind=8), allocatable :: L(:,:), X(:,:), C_lasso(:,:), Wd(:), WXj(:), D_2(:,:)
+        integer :: i
+        
+        ! # computation of the empirical Pzz_forecast
+        call cov(input_core_state_matrix, P_forecast)
+        
+        if (algo_cfg.remove_spurious < eps) then
+            allocate(result_, source=P_forecast)
+            return
+        end if
+        
+        if (.not. ieee_is_finite(algo_cfg.remove_spurious)) then
+            allocate(result_, source=P_forecast)
+            result_ = 0.0d0
+            
+            do i = 1, SIZE(result_, 1)
+                result_(i, i) = P_forecast(i, i)
+            end do
+            
+            return
+        end if
+        
+        allocate(diag_A(SIZE(P_forecast, 1)))
+        do i = 1, SIZE(result_, 1)
+            diag_A(i) = P_forecast(i, i)
+        end do
+        
+        if (any(abs(diag_A) < eps)) then
+            !# avoid division by zeros (exactly zeros, small numbers are left) by regularization
+            !# with many zeros, might give a hard time to the graphical lasso algo, as result may not converge.
+            write(10,*) 'Some coefficients in the diagonal sample covariance matrix are very close to zero'
+            write(*,*) 'Some coefficients in the diagonal sample covariance matrix are very close to zero'
+            !$omp parallel do default(shared) private(i)
+            do i = 1, SIZE(result_, 1)
+                if (abs(diag_A(i)) < eps) then                    
+                    P_forecast(i, i) = eps
+                end if
+            end do
+            !$omp end parallel do
+        end if
+        
+        
+        !# if some values in the diagonal of the covariance matrix are zero, it will still give a 1 in the diagonal of the correlation matrix
+        !# compute correlation matrix
+        call diag_sq_inv(P_forecast, D_)
+        allocate(C_forecast(SIZE(P_forecast, 1), SIZE(P_forecast, 2)))
+        C_forecast = matmul(matmul(D_, P_forecast), D_)
+        
+        ! # Compute the lasso approximation
+        n = SIZE(C_forecast, 1)
+        maxIt = 100
+        msg = 0
+        warm = 0
+        thr = 1.0d-5
+        
+        allocate(L(n,n), X(n,n), C_lasso(n,n), Wd(n), WXj(n))
+        
+        L = algo_cfg.remove_spurious
+    
+        do i = 1, n
+            L(i, i) = 0.0d0
+        end do
+        call glassofast(n,C_forecast,L,thr,maxIt,msg,warm,X,C_lasso,Wd,WXj,info)
+        
+        !# compute the P_lasso from P_forecast
+        call diag_sq(P_forecast, D_2)
+        result_ = matmul(matmul(D_2, C_lasso), D_2)
+        
+    end subroutine
+!==========================================================================================================================
 end module

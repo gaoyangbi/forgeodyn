@@ -210,6 +210,40 @@ contains
 !==========================================================================================================================
 
 !==========================================================================================================================    
+    subroutine diag_sq_inv(x, diag_inv_x)
+    ! matrix_inverse
+        real(kind=8), intent(in) :: x(:, :)
+        real(kind=8), allocatable, intent(out) :: diag_inv_x(:, :)        
+        REAL(kind=8), allocatable :: matrix(:, :)
+        integer :: i
+        
+        allocate(diag_inv_x, source=x)
+        allocate(matrix, source=x)
+        matrix = 0.0d0
+        
+        do i = 1, SIZE(matrix, 1)
+            matrix(i, i) = SQRT(x(i, i))
+        end do
+        call max_inv(matrix, diag_inv_x)
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================    
+    subroutine diag_sq(x, diag_x)
+    ! matrix_inverse
+        real(kind=8), intent(in) :: x(:, :)
+        real(kind=8), allocatable, intent(out) :: diag_x(:, :)        
+        integer :: i
+        
+        allocate(diag_x, source=x)
+        diag_x = 0.0d0
+        do i = 1, SIZE(diag_x, 1)
+            diag_x(i, i) = SQRT(x(i, i))
+        end do
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================    
     subroutine max_inv(x, inv_x)
     ! matrix_inverse
         real(kind=8), intent(in) :: x(:, :)

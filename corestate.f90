@@ -2,7 +2,7 @@ module corestate
     use common
     use utilities
     use config
-    use analyser
+    use computer
     use pca
     use blas95
     use lapack95

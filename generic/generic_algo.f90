@@ -10,8 +10,8 @@ module generic_algo
     contains
         procedure :: init_GenericAlgo
         procedure(init_corestates_iface), deferred :: init_corestates
-        procedure(analysis_step_iface),  deferred :: analysis_step
-        procedure(forecast_step_iface),  deferred :: forecast_step
+        procedure(analysis_step_iface),  deferred :: analysis_step_algo
+        procedure(forecast_step_iface),  deferred :: forecast_step_algo
         procedure :: get_current_misfits
     end type 
     

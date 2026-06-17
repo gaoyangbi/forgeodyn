@@ -146,6 +146,39 @@ contains
     end subroutine    
 !==========================================================================================================================
     
+!========================================================================================================================== 
+    subroutine compute_Kalman_gain_matrix(P, H, R, use_cholesky)
+    !*****************************************************************************************************************
+    !"""
+    !Computes the Kalman gain matrix from the correlation matrix, observation operator and observation error matrix:
+    !    K = P*trans(H)*inv(H*P*trans(H)+R)
+    !The inversion can be carried out using Cholesky decomposition.
+    !
+    !:param P: Correlation matrix
+    !:type P: 2D numpy.ndarray (dim: Nstate x Nstate)
+    !:param H: Observation operator
+    !:type H: 2D numpy.ndarray (dim: Nobs x Nstate)
+    !:param R: Observation error matrix
+    !:type R: 2D numpy.ndarray (dim: Nobs x Nobs)
+    !:param use_cholesky: if True, matrix inversion is done using Cholesky decomposition. Uses scipy.linalg.inv otherwise.
+    !:type use_cholesky: bool
+    !:return: Kalman gain matrix K = P*trans(H)*inv(H*P*trans(H)+R)
+    !:rtype: 2D numpy.ndarray (dim: Nstate x Nobs)
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: P(:,:), H(:,:), R(:,:)
+        logical, intent(in) :: use_cholesky
+        real(kind=8), allocatable :: PHT(:,:), matrix_to_invert(:,:), inverted_matrix(:,:), Kalman_gain(:,:)
+        
+        !# Compute PHT = P*transpose(H) that is needed twice
+        allocate(PHT, source=MATMUL(P, TRANSPOSE(H)))
+        
+        !# Compute the Kalman gain K = P*trans(H)*inv(H*P*trans(H)+R)
+        allocate(matrix_to_invert, source=MATMUL(H, PHT) + R)
+        
+    end subroutine    
+!==========================================================================================================================
+    
 !==========================================================================================================================    
     subroutine compute_diag_AR1_coefs(cov_U, cov_ER, Tau_U, Tau_E, A, Chol)
     !*****************************************************************************************************************

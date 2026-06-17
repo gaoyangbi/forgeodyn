@@ -4,6 +4,7 @@ module run
     use config
     use computer
     use observations
+    use analyser
     implicit none
     private
     !to improve performance in parrallel
@@ -18,7 +19,7 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================
-    subroutine gather_states(corestate, attributed_models, comm, rank, do_bcast)
+    subroutine gather_states(corestate, attributed_models, comm, rank, do_bcast, corestate_gather)
     !***************************************************************************************************************"""
     !Gather corestate to rank 0 (and broadcast to all ranks if do_bcast=True)
     !
@@ -33,11 +34,14 @@ contains
     !:param do_bcast: Controls whether the gathered corestate is broadcasted to all process
     !:type do_bcast: boolean
     !*****************************************************************************************************************"""
-        class(CoreState_type), intent(inout) :: corestate
+        class(CoreState_type), intent(in) :: corestate
         integer, intent(in) :: attributed_models(:)
         integer, intent(in) :: comm, rank
+        class(CoreState_type), allocatable, intent(out) :: corestate_gather
         logical :: do_bcast
-        integer :: ierr, i
+        integer :: ierr, i, j, nprocs, n_rea, n_t, n_coef
+        real(kind=8), allocatable :: sendbuf(:,:,:)
+        real(kind=8), allocatable :: recvbuf(:,:,:,:)
         
         !#synchronyze all processes
         !call MPI_BARRIER(comm, ierr)
@@ -45,13 +49,45 @@ contains
         ! In this program, we havn't write the gather code in the order of the realisations but in the order of the measures.
         
         !#for each measure in corestate
+        call MPI_Comm_size(comm, nprocs, ierr)
+        allocate(corestate_gather, source=corestate)
         do i = 1, size(corestate.measures_, 1)
             !#synchronyze all processes
             call MPI_BARRIER(comm, ierr)
             !#gather from all cores to rank 0
+            n_rea = SIZE(corestate.measures_(i).measure_data, 1)
+            n_t = SIZE(corestate.measures_(i).measure_data, 2)
+            n_coef = SIZE(corestate.measures_(i).measure_data, 3)
             
+            allocate(sendbuf, source=corestate.measures_(i).measure_data)
+            if (rank == 0) then
+                allocate(recvbuf(n_rea, n_t, n_coef, nprocs))
+            end if
+            
+            call MPI_GATHER(sendbuf, n_rea*n_t*n_coef, MPI_DOUBLE_PRECISION, &
+                  recvbuf, n_rea*n_t*n_coef, MPI_DOUBLE_PRECISION, &
+                  0, MPI_COMM_WORLD, ierr)
+            
+            deallocate(corestate_gather.measures_(i).measure_data)
+            allocate(corestate_gather.measures_(i).measure_data(n_rea*nprocs, n_t, n_coef))
+            
+            if (rank == 0) then
+                do j = 1, nprocs
+                    corestate_gather.measures_(i).measure_data(n_rea*(j-1)+1:n_rea*j,:,:) = recvbuf(:,:,:,j)
+                end do
+            end if
+            
+            !# Broadcast the gathered corestate to all processes if do_bcast is true
+            if (do_bcast) then
+                !#synchronyze all processes
+                call MPI_BARRIER(comm, ierr)
+                call MPI_BCAST(corestate_gather.measures_(i).measure_data, n_rea*n_t*n_coef*nprocs, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)                
+            end if
+            
+            deallocate(sendbuf)
+            if (ALLOCATED(recvbuf)) deallocate(recvbuf)
         end do
-        print *, "gathering done on rank ", rank, SIZE(corestate.measures_(1).measure_data, 1), SIZE(corestate.measures_(1).measure_data, 3)
+        !print *, "gathering done on rank ", rank, corestate.measures_(1).measure_data(2,1,1), corestate_gather.measures_(1).measure_data(2,1,1), corestate.measures_(1).key
     end subroutine
 !==========================================================================================================================
     
@@ -111,7 +147,7 @@ contains
         type(AugkfAlgo) :: algo
         type(CoreState_type) :: computed_states, forecast_states, analysed_states, misfits
         type(CoreState_type) :: computed_states_slice
-        class(CoreState_type), allocatable :: forecast_states_slice
+        class(CoreState_type), allocatable :: forecast_states_slice, gather_computed_states
         REAL(kind=8), allocatable :: Z_AR3(:,:,:)
         integer :: R
         
@@ -262,6 +298,7 @@ contains
             allocate(computed_states_slice.measures_(j).measure_data(SIZE(computed_states.measures_(j).measure_data, 1), 1, SIZE(computed_states.measures_(j).measure_data, 3)))
         end do
         allocate(forecast_states_slice, source=computed_states_slice)
+        
         do while (i_t < idx_max)
             t = algo.config.t_forecasts(i_t+1)
             
@@ -357,23 +394,14 @@ contains
                     do j = 1, size(computed_states_slice.measures_, 1)
                         computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
                     end do
-                    call gather_states(computed_states_slice, algo.attributed_models, comm, rank, .true.)
+                    call gather_states(computed_states_slice, algo.attributed_models, comm, rank, .true., gather_computed_states)
+                    call algo.analyser_1.analysis_step(gather_computed_states, algo.config, algo.nb_realisations)
                 end if
                 
             end if 
             
         end do
         
-        !i_t = 1
-        !allocate(computed_states_slice.measures_, source=computed_states.measures_)
-        !allocate(computed_states_slice.max_degrees_, source=computed_states.max_degrees_)
-        !do j = 1, size(computed_states_slice.measures_, 1)
-        !    deallocate(computed_states_slice.measures_(j).measure_data)
-        !    allocate(computed_states_slice.measures_(j).measure_data(SIZE(computed_states.measures_(j).measure_data, 1), 1, SIZE(computed_states.measures_(j).measure_data, 3)))
-        !    computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, i_t:i_t, :)
-        !end do
-        !allocate(forecast_states_slice, source=computed_states_slice)
-        !call algo.forecaster_1.parallel_forecast_step_AR1(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states_slice, pseed, 1, forecast_states_slice)
         
         !print *, forecast_states_slice.measures_(1).measure_data(250, 1, 1)
         !print *, t, algo.config.t_analyses(SIZE(algo.config.t_analyses, 1) - 1), algo.config.dt_f / 2.0d0

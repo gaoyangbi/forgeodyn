@@ -24,7 +24,7 @@ module augkf_algo
         class(AugkfAnalyserAR3), allocatable :: analyser_3
     contains
         procedure :: init_AugkfAlgo, check_PCA, create_forecaster, create_analyser
-        procedure :: init_corestates, analysis_step, forecast_step
+        procedure :: init_corestates, analysis_step_algo, forecast_step_algo
         procedure :: is_equ
         procedure :: extract_prior_and_covariances
         procedure :: check_coef_size
@@ -383,7 +383,7 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================    
-    subroutine analysis_step(self, input_core_state, analysis_time)
+    subroutine analysis_step_algo(self, input_core_state, analysis_time)
     !*****************************************************************************************************************
     !"""
     !Sets up the corestates needed for the AugKF algorithm.
@@ -404,7 +404,7 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================    
-    subroutine forecast_step(self, input_core_state, random_state)
+    subroutine forecast_step_algo(self, input_core_state, random_state)
     !*****************************************************************************************************************
     !"""
     !Sets up the corestates needed for the AugKF algorithm.
