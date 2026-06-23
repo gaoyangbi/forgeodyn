@@ -3,6 +3,9 @@ module analyser
     use common
     use computer
     use observations
+    use blas95
+    use lapack95
+    use f95_precision
     use, intrinsic :: ieee_arithmetic
     use config
     use corestate
@@ -367,7 +370,8 @@ contains
         integer, intent(in) :: nb_realisations
         REAL(kind=8), allocatable :: analysed_B(:, :)
         class(measure_observations_mat), allocatable :: mf_X(:), Hb(:), Rbb(:)
-        REAL(KIND=8), allocatable :: Pbb_forecast(:,:)
+        REAL(KIND=8), allocatable :: Pbb_forecast(:,:), Kbb(:,:)        
+        integer :: i_real
         
         allocate(mf_X, source=self.mf_X)
         !# obs operator
@@ -377,10 +381,15 @@ contains
         !# compute Pbb from B state
         call self.remove_small_correlations(input_core_state.measures_(1).measure_data(:,1,:), 1.0d-10, algo_cfg, Pbb_forecast)
         !# Updates the B part of the core_state by the result of the Kalman filter for each model
+        write(*,*) "Getting best linear unbiased estimate of B..."
+        write(10,*) "Getting best linear unbiased estimate of B..."
         allocate(analysed_B(nb_realisations, algo_cfg.Nb()))
         analysed_B = 0.0d0
         
         if (TRIM(algo_cfg.kalman_norm) == 'l2') then  !  # for non least square norm, iteration are needed
+            call compute_Kalman_gain_matrix(Pbb_forecast, Hb(1).mat, Rbb(1).mat, .True., Kbb)
+            
+            print *, SIZE(Hb, 1), SIZE(Rbb, 1)
             
         else if (TRIM(algo_cfg.kalman_norm) == 'huber') then
             
@@ -388,7 +397,7 @@ contains
             
         end if            
         
-        print *, SIZE(Hb, 1), SIZE(Rbb, 1)
+        
     end subroutine
 !==========================================================================================================================
     
