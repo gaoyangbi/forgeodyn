@@ -40,13 +40,16 @@ contains
         class(CoreState_type), allocatable, intent(out) :: corestate_gather
         logical :: do_bcast
         integer :: ierr, i, j, nprocs, n_rea, n_t, n_coef
+        integer :: local_idx, global_idx
+        integer, allocatable :: recv_models(:,:)
         real(kind=8), allocatable :: sendbuf(:,:,:)
         real(kind=8), allocatable :: recvbuf(:,:,:,:)
         
         !#synchronyze all processes
         !call MPI_BARRIER(comm, ierr)
         !#gather from all cores to rank 0
-        ! In this program, we havn't write the gather code in the order of the realisations but in the order of the measures.
+        ! In this program, we havn't write the gather code in the order of the realisations but in the order of the measures. 
+        ! we have solved this problem! 2026.6.23
         
         !#for each measure in corestate
         call MPI_Comm_size(comm, nprocs, ierr)
@@ -62,10 +65,15 @@ contains
             allocate(sendbuf, source=corestate.measures_(i).measure_data)
             if (rank == 0) then
                 allocate(recvbuf(n_rea, n_t, n_coef, nprocs))
+                allocate(recv_models(n_rea, nprocs))
             end if
             
             call MPI_GATHER(sendbuf, n_rea*n_t*n_coef, MPI_DOUBLE_PRECISION, &
                   recvbuf, n_rea*n_t*n_coef, MPI_DOUBLE_PRECISION, &
+                  0, MPI_COMM_WORLD, ierr)
+            
+            call MPI_GATHER(attributed_models, n_rea, MPI_INTEGER, &
+                  recv_models, n_rea, MPI_INTEGER, &
                   0, MPI_COMM_WORLD, ierr)
             
             deallocate(corestate_gather.measures_(i).measure_data)
@@ -73,7 +81,15 @@ contains
             
             if (rank == 0) then
                 do j = 1, nprocs
-                    corestate_gather.measures_(i).measure_data(n_rea*(j-1)+1:n_rea*j,:,:) = recvbuf(:,:,:,j)
+                    
+                    do local_idx = 1, n_rea
+
+                        global_idx = recv_models(local_idx,j) + 1
+
+                        corestate_gather.measures_(i).measure_data(global_idx,:,:) = recvbuf(local_idx,:,:,j)
+
+                    end do                    
+                    !corestate_gather.measures_(i).measure_data(n_rea*(j-1)+1:n_rea*j,:,:) = recvbuf(:,:,:,j)
                 end do
             end if
             
@@ -86,8 +102,9 @@ contains
             
             deallocate(sendbuf)
             if (ALLOCATED(recvbuf)) deallocate(recvbuf)
+            if (ALLOCATED(recv_models)) deallocate(recv_models)
         end do
-        !print *, "gathering done on rank ", rank, corestate.measures_(1).measure_data(2,1,1), corestate_gather.measures_(1).measure_data(2,1,1), corestate.measures_(1).key
+        !print *, "gathering done on rank ", rank, corestate.measures_(1).measure_data(5,1,1), corestate_gather.measures_(1).measure_data(10,1,1), corestate.measures_(1).key
     end subroutine
 !==========================================================================================================================
     
@@ -395,7 +412,7 @@ contains
                         computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
                     end do
                     call gather_states(computed_states_slice, algo.attributed_models, comm, rank, .true., gather_computed_states)
-                    call algo.analyser_1.analysis_step(gather_computed_states, algo.config, algo.nb_realisations)
+                    call algo.analyser_1.analysis_step(gather_computed_states, algo.config, algo.nb_realisations, algo.attributed_models)
                 end if
                 
             end if 

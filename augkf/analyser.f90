@@ -299,7 +299,7 @@ contains
 !==========================================================================================================================
 
 !========================================================================================================================== 
-    subroutine analysis_step(self, input_core_state, algo_cfg, nb_realisations)
+    subroutine analysis_step(self, input_core_state, algo_cfg, nb_realisations, attributed_models)
     !*****************************************************************************************************************
     !""" Does the analysis at time t on the B and Z=[UE] part of the input_core_state.
     !Updates SV = A(B)U - ER in consequence.
@@ -313,9 +313,10 @@ contains
         class(AugkfAnalyserAR1), intent(in) :: self
         class(CoreState_type), intent(in) :: input_core_state
         class(ComputationConfig), intent(in) :: algo_cfg
+        integer, intent(in) :: attributed_models(:)
         integer, intent(in) :: nb_realisations
         class(CoreState_type), allocatable :: ana_core_state
-        integer :: i, n_rea, n_t, n_coef, nprocs, rank, ierr, comm
+        integer :: i, n_rea, n_t, n_coef, nprocs, rank, ierr, comm, local_idx, global_idx
         
         !# copy core state
         allocate(ana_core_state, source=input_core_state)        
@@ -326,11 +327,19 @@ contains
         if (.not. self.sv_analysis() .and. .not. self.mf_analysis()) then 
             do i = 1, size(ana_core_state.measures_, 1)
                 deallocate(ana_core_state.measures_(i).measure_data)
-                n_rea = SIZE(ana_core_state.measures_(i).measure_data, 1)
+                n_rea = SIZE(attributed_models)
                 n_t = SIZE(ana_core_state.measures_(i).measure_data, 2)
                 n_coef = SIZE(ana_core_state.measures_(i).measure_data, 3)
-                allocate(ana_core_state.measures_(i).measure_data(n_rea/nprocs, n_t, n_coef))
-                ana_core_state.measures_(i).measure_data = input_core_state.measures_(i).measure_data(rank*n_rea/nprocs+1:(rank+1)*n_rea/nprocs, :, :)
+                allocate(ana_core_state.measures_(i).measure_data(n_rea, n_t, n_coef))
+                
+                do local_idx = 1, n_rea
+
+                    global_idx = attributed_models(local_idx) + 1
+
+                    ana_core_state.measures_(i).measure_data(local_idx,:,:) = &
+                         input_core_state.measures_(i).measure_data(global_idx,:,:)
+
+                end do
             end do
             
             print *, "No analysis performed at this step, returning the input core state as analysed core state!"
@@ -338,7 +347,7 @@ contains
         
         if (self.mf_analysis()) then
             !# perform MF analysis
-            call self.analyse_B(ana_core_state, algo_cfg, nb_realisations)
+            call self.analyse_B(ana_core_state, algo_cfg, nb_realisations, attributed_models)
         end if
         
         
@@ -347,7 +356,7 @@ contains
 !==========================================================================================================================
     
 !========================================================================================================================== 
-    subroutine analyse_B(self, input_core_state, algo_cfg, nb_realisations)
+    subroutine analyse_B(self, inout_core_state, algo_cfg, nb_realisations, attributed_models)
     !*****************************************************************************************************************
     !"""
     !Returns the analysed data for B by a BLUE given the observations.
@@ -365,13 +374,15 @@ contains
     !"""
     !*****************************************************************************************************************
         class(AugkfAnalyserAR1), intent(in) :: self
-        class(CoreState_type), intent(inout) :: input_core_state
+        class(CoreState_type), intent(inout) :: inout_core_state
         class(ComputationConfig), intent(in) :: algo_cfg
         integer, intent(in) :: nb_realisations
+        integer, intent(in) :: attributed_models(:)
         REAL(kind=8), allocatable :: analysed_B(:, :)
         class(measure_observations_mat), allocatable :: mf_X(:), Hb(:), Rbb(:)
-        REAL(KIND=8), allocatable :: Pbb_forecast(:,:), Kbb(:,:)        
-        integer :: i_real
+        REAL(KIND=8), allocatable :: Pbb_forecast(:,:), Kbb(:,:)
+        REAL(KIND=8), allocatable :: P_eig_val(:), P_eig_vec(:,:)
+        integer :: i_real, i, info
         
         allocate(mf_X, source=self.mf_X)
         !# obs operator
@@ -379,7 +390,7 @@ contains
         !# obs error
         allocate(Rbb, source=self.mf_Rxx)
         !# compute Pbb from B state
-        call self.remove_small_correlations(input_core_state.measures_(1).measure_data(:,1,:), 1.0d-10, algo_cfg, Pbb_forecast)
+        call self.remove_small_correlations(inout_core_state.measures_(1).measure_data(:,1,:), 1.0d-10, algo_cfg, Pbb_forecast)
         !# Updates the B part of the core_state by the result of the Kalman filter for each model
         write(*,*) "Getting best linear unbiased estimate of B..."
         write(10,*) "Getting best linear unbiased estimate of B..."
@@ -389,14 +400,61 @@ contains
         if (TRIM(algo_cfg.kalman_norm) == 'l2') then  !  # for non least square norm, iteration are needed
             call compute_Kalman_gain_matrix(Pbb_forecast, Hb(1).mat, Rbb(1).mat, .True., Kbb)
             
-            print *, SIZE(Hb, 1), SIZE(Rbb, 1)
+            do i = 1, SIZE(attributed_models)
+                i_real = attributed_models(i) + 1
+                !analysed_B(i_real, :) = input_core_state.measures_(1).measure_data(i_real, 1, :) + matmul(Kbb, (mf_X(1).mat(:, i) - matmul(Hb(1).mat, input_core_state.measures_(1).measure_data(i_real, 1, :))))
+                call get_BLUE(inout_core_state.measures_(1).measure_data(i_real,1,:), &
+                                mf_X(1).mat(i_real,:), &
+                                Pbb_forecast, Hb(1).mat, &
+                                Rbb(1).mat, &
+                                Kbb, &
+                                .True., &
+                                analysed_B(i_real,:))
+            end do
             
         else if (TRIM(algo_cfg.kalman_norm) == 'huber') then
+            !# compute inverse of P_bb before loop on reals using its symmetry
+            allocate(P_eig_val(SIZE(Pbb_forecast, 1)))
+            allocate(P_eig_vec, source=Pbb_forecast)
+            call syevd(P_eig_vec, P_eig_val, 'V', 'U', info)
+            P_eig_val = max(P_eig_val, 1.0d-10)
+        
+            do i = 1, SIZE(attributed_models)
+                i_real = attributed_models(i) + 1
+                call compute_Kalman_huber(inout_core_state.measures_(1).measure_data(i_real,1,:), &
+                                    mf_X(1).mat(i_real,:), &
+                                    P_eig_val, &
+                                    P_eig_vec, &
+                                    Hb(1).mat, &
+                                    Rbb(1).mat, &
+                                    50, &
+                                    analysed_B(i_real,:))
+            end do
             
         else
-            
+            write(*,*) "Invalid value of param kalman_norm, should be equal to huber or l2."
+            write(10,*) "Invalid value of param kalman_norm, should be equal to huber or l2."
         end if            
         
+        
+        allocate(P_eig_val(SIZE(Pbb_forecast, 1)))
+        allocate(P_eig_vec, source=Pbb_forecast)
+        call syevd(P_eig_vec, P_eig_val, 'V', 'U', info)
+        P_eig_val = max(P_eig_val, 1.0d-10)
+        
+        do i = 1, SIZE(attributed_models)
+            i_real = attributed_models(i) + 1
+            call compute_Kalman_huber(inout_core_state.measures_(1).measure_data(i_real,1,:), &
+                                mf_X(1).mat(i_real,:), &
+                                P_eig_val, &
+                                P_eig_vec, &
+                                Hb(1).mat, &
+                                Rbb(1).mat, &
+                                50, &
+                                analysed_B(i_real,:))
+        end do
+        
+        !print *, P_eig_vec(2,:)
         
     end subroutine
 !==========================================================================================================================

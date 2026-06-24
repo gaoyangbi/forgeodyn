@@ -147,7 +147,7 @@ contains
 !==========================================================================================================================
     
 !========================================================================================================================== 
-    subroutine compute_Kalman_gain_matrix(P, H, R, use_cholesky)
+    subroutine compute_Kalman_gain_matrix(P, H, R, use_cholesky, Kalman_gain)
     !*****************************************************************************************************************
     !"""
     !Computes the Kalman gain matrix from the correlation matrix, observation operator and observation error matrix:
@@ -168,14 +168,102 @@ contains
     !*****************************************************************************************************************
         real(kind=8), intent(in) :: P(:,:), H(:,:), R(:,:)
         logical, intent(in) :: use_cholesky
-        real(kind=8), allocatable :: PHT(:,:), matrix_to_invert(:,:), inverted_matrix(:,:), Kalman_gain(:,:)
+        real(kind=8), allocatable, intent(out) :: Kalman_gain(:,:)
+        real(kind=8), allocatable :: PHT(:,:), matrix_to_invert(:,:), inverted_matrix(:,:)
+        real(kind=8), allocatable :: S(:,:), KT(:,:), ST(:,:)
+        integer :: info
+        
         
         !# Compute PHT = P*transpose(H) that is needed twice
         allocate(PHT, source=MATMUL(P, TRANSPOSE(H)))
         
         !# Compute the Kalman gain K = P*trans(H)*inv(H*P*trans(H)+R)
         allocate(matrix_to_invert, source=MATMUL(H, PHT) + R)
+        call potrf(matrix_to_invert, 'L', info) 
+        !!! atention: potrf modifies the input matrix, so we need to make a copy of it if we want to keep it for later use
         
+        if (use_cholesky .AND. (info == 0)) then
+            allocate(KT, source=transpose(PHT))
+            call potrs(matrix_to_invert, KT, 'L',info)
+            allocate(Kalman_gain, source=transpose(KT))
+        else
+            allocate(KT, source=transpose(PHT))
+            allocate(ST, source=transpose(MATMUL(H, PHT) + R))
+            call gesv(ST, KT, info=info)
+            allocate(Kalman_gain, source=transpose(KT))
+        end if
+        
+    end subroutine    
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine compute_Kalman_huber(b_f, y, P_eig_val, P_eig_vec, H, Rbb, max_steps, b_kplus1)
+    !*****************************************************************************************************************
+    !"""
+    !Solve iteratively the least square problem with a Huber norm, the equation is written (cf Walker and jackson 2000):
+    !b^k+1 = b^f + (P^{-1/2} + H^T R^{-1/2} W R^{-1/2} H)^-1 ( H^T R^{-1/2} W R^{-1/2}) (y - H b^f)
+    !
+    !:param max_steps: maximum number of realisations
+    !:type max_steps: int 
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: b_f(:), y(:), P_eig_val(:), P_eig_vec(:,:), H(:,:), Rbb(:,:)
+        integer, intent(in) :: max_steps
+        real(kind=8), intent(inout) :: b_kplus1(:)
+        real(kind=8), allocatable :: P_diag(:,:)
+        real(kind=8), allocatable :: S(:,:), KT(:,:), ST(:,:)
+        integer :: info, i
+        
+        ! # calculate P_diag   (1/lamda)
+        allocate(P_diag, source=P_eig_vec)
+        P_diag = 0.0d0
+        do i = 1, SIZE(P_diag, 1)
+            P_diag(i,i) = 1.0d0 / P_eig_val(i)
+        end do
+        
+        print *, P_diag(1,:)
+        
+    end subroutine    
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine get_BLUE(X, Y, P, H, R, K, cholesky, BLUE_X)
+    !*****************************************************************************************************************
+    !"""
+    !Returns the Best Linear Unbiased Estimate (BLUE) for X from the observations Y and the covariances matrices.
+    !
+    !:param X: current state vector
+    !:type X: 1D numpy.ndarray (dim: Nstate)
+    !:param Y: observation vector
+    !:type Y: 1D numpy.ndarray (dim: Nobs)
+    !:param P: covariance of forecast priors
+    !:type P: 2D numpy.ndarray (dim: Nstate x Nstate)
+    !:param H: Observation operator
+    !:type H: 2D numpy.ndarray (dim: Nobs x Nstate)
+    !:param R: covariance of observations errors
+    !:type R: 2D numpy.ndarray (dim: Nobs x Nobs)
+    !:param K: Kalman gain matrix. Optionnal: if not supplied, will be computed from other matrices.
+    !:type K: 2D numpy.ndarray (dim: Nstate x Nobs)
+    !:param cholesky: if True, uses Cholesky decomposition to compute matrices' inverses
+    !:type cholesky: bool
+    !:return: Best Linear Unbiased Estimate of X
+    !:rtype: 1D numpy.ndarray (dim: Nstate)
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: X(:), Y(:), P(:,:), H(:,:), R(:,:), K(:,:)
+        logical, intent(in) :: cholesky
+        real(kind=8), intent(inout) :: BLUE_X(:)
+        real(kind=8), allocatable :: D(:), matrix_to_invert(:,:), inverted_matrix(:,:)
+        real(kind=8), allocatable :: S(:,:), KT(:,:), ST(:,:)
+        integer :: info
+        
+        !# Compute the innovation vector first
+        allocate(D, source=Y - MATMUL(H, X))
+        
+        !# Compute Kalman gain matrix if not provided
+        ! not needed here since K is provided as input
+        
+        BLUE_X = X + MATMUL(K, D)     
     end subroutine    
 !==========================================================================================================================
     

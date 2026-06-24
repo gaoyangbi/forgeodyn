@@ -188,7 +188,7 @@ contains
         
         if (TRIM(this.AR_type) == 'none') then
             write(10,'(A)') "Type of AR process was not set in the config file! Assuming diagonal."
-            this.kalman_norm = 'diag'
+            this.AR_type = 'diag'
         end if
         
         if (this.N_pca_u == -1 .AND. TRIM(this.AR_type) == 'AR3') then
@@ -316,6 +316,7 @@ contains
     !*****************************************************************************************************************
     !"""
     !Builds the full path according to the path given in conf or set default.
+    !TODO: This feature still needs testing. 
     !"""
     !*****************************************************************************************************************
         class(ComputationConfig), intent(inout) :: this
