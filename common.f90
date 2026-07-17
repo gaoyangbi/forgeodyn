@@ -210,9 +210,11 @@ contains
         real(kind=8), intent(in) :: b_f(:), y(:), P_eig_val(:), P_eig_vec(:,:), H(:,:), Rbb(:,:)
         integer, intent(in) :: max_steps
         real(kind=8), intent(inout) :: b_kplus1(:)
-        real(kind=8), allocatable :: P_diag(:,:)
-        real(kind=8), allocatable :: S(:,:), KT(:,:), ST(:,:)
+        real(kind=8), allocatable :: P_diag(:,:), Pbb_inv(:,:)
+        real(kind=8), allocatable :: sq_R(:), R_H(:,:), H_R(:,:), W(:), ones_min(:), y_minus_H_b(:)
+        real(kind=8), allocatable :: A(:,:), B(:), diag(:,:), epsilon(:), b_k(:)
         integer :: info, i
+        real(kind=8) :: c, cutoff
         
         ! # calculate P_diag   (1/lamda)
         allocate(P_diag, source=P_eig_vec)
@@ -220,9 +222,193 @@ contains
         do i = 1, SIZE(P_diag, 1)
             P_diag(i,i) = 1.0d0 / P_eig_val(i)
         end do
+        Pbb_inv = MATMUL(P_eig_vec, MATMUL(P_diag, TRANSPOSE(P_eig_vec)))
         
-        print *, P_diag(1,:)
+        ! # calculate Rbb^{-1/2}
+        allocate(sq_R(SIZE(Rbb, 1)))
+        sq_R = 0.0d0
+        do i = 1, SIZE(Rbb, 1)
+            sq_R(i) = 1.0d0 / SQRT(Rbb(i,i))
+        end do
         
+        ! Calculate R_H = Rbb^{-1/2} * H.
+        ! Since Rbb^{-1/2} is diagonal, this is implemented by scaling each row of H
+        ! instead of using MATMUL.
+        allocate(R_H(SIZE(H, 1), SIZE(H, 2)))
+        R_H = 0.0d0
+        do i = 1, SIZE(H, 1)
+            R_H(i,:) = sq_R(i) * H(i,:)
+        end do
+        allocate(H_R, source=TRANSPOSE(R_H))
+        
+        ! Initialize Huber weights to 1 (equal weights for all observations)
+        allocate(W(SIZE(Rbb,1)))
+        W = 1.0d0
+        allocate(ones_min(SIZE(Rbb,1)))
+        ones_min = 1.0d0
+        
+        ! parameter and y_minus_H_b
+        c = 1.5
+        cutoff = 1.0d-8
+        allocate(y_minus_H_b, source=y-MATMUL(H, b_f))
+        
+        ! calcualte b_kplus1
+        allocate(A, source=Pbb_inv)
+        A = 0.0d0
+        allocate(B, source=y_minus_H_b)
+        B = 0.0d0
+        allocate(diag(SIZE(W,1), SIZE(W,1)))
+        diag = 0.0d0
+        b_kplus1 = 0.0d0
+        allocate(b_k, source=b_f)
+        b_k = 0.0d0
+        allocate(epsilon, source=y)
+        do i = 1, max_steps
+            call diag_(W, diag)
+            A = Pbb_inv + MATMUL(H_R, MATMUL(diag, R_H))
+            call diag_(W * sq_R, diag)
+            B = MATMUL(H_R, MATMUL(diag, y_minus_H_b))
+            call gesv(A, B, info=info)
+            if (info /= 0) then
+                print *, "Error in solving the linear system, info = ", info
+                stop
+            end if
+            b_kplus1 = b_f + B
+            ! # if difference between last iteration and this one is less than 2% of the deviation, break the loop
+            if (i>1) then
+                if (maxval(abs(b_kplus1 - b_k)) < 1.0d-4 * maxval(abs(b_k))) exit
+            end if
+            b_k = b_kplus1
+            epsilon = abs(y - matmul(H, b_kplus1)) * sq_R
+            epsilon = max(epsilon, cutoff)
+            !# if residual is bigger than one, weight is replaced by one
+            W = MIN(c / epsilon, ones_min)
+            !# conditions to break the loop to make it faster
+            !# then nothing will change in the loop, LS solution because no outliers
+            if (all(abs(W - 1.0d0) < 1.0d-12)) exit
+        end do        
+    end subroutine    
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine compute_Kalman_huber_parameter_basis(b_f, y, HPzzHT, PzzHT, H, Rbb, norm, n_steps, b_kplus1)
+    !*****************************************************************************************************************
+    !"""
+    !very similar to compute_Kalman_huber but written in the parameter basis.
+    !Solve iteratively the least square problem with a Huber norm, the equation is written (cf Walker and jackson 2000):
+    !b^k+1 = b^f + (P^{-1/2} + H^T R^{-1/2} W R^{-1/2} H)^-1 (H^T R^{-1/2} W R^{-1/2}) (y - H b^f)
+    !
+    !:param max_steps: maximum number of realisations
+    !:type max_steps: int (dim: N_real x N_coefs_A)
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: b_f(:), y(:), HPzzHT(:,:), PzzHT(:,:), H(:,:), Rbb(:,:)
+        integer, intent(in) :: n_steps
+        character(len=*), intent(in) :: norm
+        real(kind=8), intent(inout) :: b_kplus1(:)
+        real(kind=8), allocatable :: sq_R(:), W(:), ones_min(:), y_minus_H_b(:)
+        real(kind=8), allocatable :: R_k(:,:), A(:,:), B(:), epsilon(:), prev_W(:)
+        integer :: info, i, j, max_steps
+        real(kind=8) :: c, cutoff
+        
+        ! # Calculate sqrt(diag(Rbb))
+        allocate(sq_R(SIZE(Rbb, 1)))
+        sq_R = 0.0d0
+        do i = 1, SIZE(Rbb, 1)
+            sq_R(i) = SQRT(Rbb(i,i))
+        end do
+        
+        ! Initialize Huber weights to 1 (equal weights for all observations)
+        allocate(W(SIZE(Rbb,1)))
+        W = 1.0d0
+        allocate(ones_min(SIZE(Rbb,1)))
+        ones_min = 1.0d0
+        
+        ! parameter and y_minus_H_b
+        c = 1.5
+        cutoff = 1.0d-8
+        allocate(y_minus_H_b, source=y-MATMUL(H, b_f))
+        
+        max_steps = n_steps
+        if (trim(norm) == 'L2' .OR. trim(norm) == 'l2') then
+            max_steps = 1 !# first step just computes least square, one iteration in the loop is fine
+        end if
+        
+        !# initialize matrix
+        allocate(R_k(SIZE(sq_R), SIZE(sq_R)))
+        allocate(A, source = HPzzHT)
+        allocate(B, source=y_minus_H_b)
+        allocate(epsilon, source=y)
+        allocate(prev_W, source=W)
+        
+        do i = 1, max_steps
+            R_k = 0.0d0
+            do j = 1, SIZE(R_k, 1)
+                R_k(j, j) = sq_R(j) * sq_R(j) / W(j)
+            end do
+            A = HPzzHT + R_k
+            B = y_minus_H_b
+            call gesv(A, B, info=info)
+            
+            if (info /= 0) then
+                print *, "Error in solving the linear system, info = ", info
+                stop
+            end if
+            b_kplus1 = b_f + MATMUL(PzzHT, B)
+            
+            !# if difference between last iteration and this one is less than 2% of the deviation, break the loop
+            epsilon = abs(y - MATMUL(H, b_kplus1)) / sq_R
+            epsilon = max(epsilon, cutoff)
+            
+            prev_W = W
+            W = MIN(c / epsilon, ones_min) !# if residual is bigger than c, weight is replaced by one
+            !# conditions to break the loop to make it faster
+            if (all(W == ones_min)) exit
+            
+            if (i > 1 .and. maxval(abs(W - prev_W)) < 1.0e-4 * maxval(W)) exit
+            
+        end do
+    end subroutine    
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine compute_misfit(realisations, mean, inverse_weight_matrix, result_)
+    !*****************************************************************************************************************
+    !"""
+    !Computes the weighted observation-space misfit (Y - HX) using the Mahalanobis distance.
+    !The misfit is a weighted norm according to the weight_matrice (Mahalanobis distance).
+    !:warning: The inverse weight matrix must be supplied
+    !
+    !:param realisations: Array of realisations (dim: nb_real x nb_coefs)
+    !:type realisations: np.array
+    !:param mean: Mean that will be subtracted to the realisations array (dim: nb_coefs)
+    !:type mean: np.array
+    !:param inverse_weight_matrix: Inverse of the weight matrix (WM^{-1}, dim: nb_coefs x nb_coefs)
+    !:type inverse_weight_matrix: np.array
+    !:return: sqrt(1/(nb_real(nb_coefs-1))*sum[(realisations - mean)^T WM^{-1} (realisations-mean)])
+    !:rtype: float
+    !"""
+    !*****************************************************************************************************************
+        real(kind=8), intent(in) :: realisations(:,:), mean(:,:), inverse_weight_matrix(:,:)
+        real(kind=8), intent(inout) :: result_
+        real(kind=8), allocatable :: distance(:,:)
+        integer :: nb_realisations, nb_coefs, i
+        real(kind=8) :: non_norm_squared_norm
+        
+        
+        nb_realisations = size(realisations, 1)
+        nb_coefs = size(realisations, 2)
+        
+        !# Regular distance D (this step will fail if the dimensions are not matching)
+        allocate(distance, source=realisations - mean)
+        
+        !# Compute the sum over realisations (assumed axis=0) of D^T * WM^{-1} * D that is the squared weighted norm.
+        non_norm_squared_norm = 0.0d0
+        do i = 1, nb_realisations
+            non_norm_squared_norm = non_norm_squared_norm + DOT_PRODUCT(distance(i,:), MATMUL(inverse_weight_matrix, distance(i,:)))
+        end do
+        
+        result_ = SQRT(non_norm_squared_norm / (nb_realisations * (nb_coefs - 1)))
     end subroutine    
 !==========================================================================================================================
     

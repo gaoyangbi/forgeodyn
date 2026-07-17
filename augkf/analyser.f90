@@ -9,6 +9,7 @@ module analyser
     use, intrinsic :: ieee_arithmetic
     use config
     use corestate
+    use pca
     implicit none
     
     
@@ -310,39 +311,41 @@ contains
     !:rtype: corestates.CoreState (dim: nb_realisations x Ncorestate)
     !"""
     !*****************************************************************************************************************
-        class(AugkfAnalyserAR1), intent(in) :: self
+        class(AugkfAnalyserAR1), intent(inout) :: self
         class(CoreState_type), intent(in) :: input_core_state
         class(ComputationConfig), intent(in) :: algo_cfg
+        class(set_prior_type), intent(in) :: algo_avg_prior
+        class(CoreState_type), intent(inout) :: ana_core_state_slice
         integer, intent(in) :: attributed_models(:)
         integer, intent(in) :: nb_realisations
+        class(NormedPCAOperator), intent(in) :: pcaU_operator
         class(CoreState_type), allocatable :: ana_core_state
         integer :: i, n_rea, n_t, n_coef, nprocs, rank, ierr, comm, local_idx, global_idx
         
         !# copy core state
         allocate(ana_core_state, source=input_core_state)        
-        call MPI_Comm_size(MPI_COMM_WORLD, nprocs, ierr)
-        call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+        !call MPI_Comm_size(MPI_COMM_WORLD, nprocs, ierr)
+        !call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
         
         !# if no analysis
         if (.not. self.sv_analysis() .and. .not. self.mf_analysis()) then 
-            do i = 1, size(ana_core_state.measures_, 1)
-                deallocate(ana_core_state.measures_(i).measure_data)
+            do i = 1, size(ana_core_state.measures_, 1)                
                 n_rea = SIZE(attributed_models)
-                n_t = SIZE(ana_core_state.measures_(i).measure_data, 2)
-                n_coef = SIZE(ana_core_state.measures_(i).measure_data, 3)
-                allocate(ana_core_state.measures_(i).measure_data(n_rea, n_t, n_coef))
-                
+                !n_t = SIZE(ana_core_state.measures_(i).measure_data, 2)
+                !n_coef = SIZE(ana_core_state.measures_(i).measure_data, 3)
+                !deallocate(ana_core_state.measures_(i).measure_data)
+                !allocate(ana_core_state.measures_(i).measure_data(n_rea, n_t, n_coef))                
                 do local_idx = 1, n_rea
 
                     global_idx = attributed_models(local_idx) + 1
 
-                    ana_core_state.measures_(i).measure_data(local_idx,:,:) = &
+                    ana_core_state_slice.measures_(i).measure_data(local_idx,:,:) = &
                          input_core_state.measures_(i).measure_data(global_idx,:,:)
-
                 end do
             end do
             
             print *, "No analysis performed at this step, returning the input core state as analysed core state!"
+            return
         end if
         
         if (self.mf_analysis()) then
@@ -350,8 +353,28 @@ contains
             call self.analyse_B(ana_core_state, algo_cfg, nb_realisations, attributed_models)
         end if
         
+        if (self.sv_analysis()) then
+            !# perform SV analysis
+            call self.analyse_Z(ana_core_state, algo_cfg, nb_realisations, attributed_models, pcaU_operator, algo_avg_prior)
+        end if
         
-        !print *, "rank", rank, ana_core_state.measures_(3).measure_data(1,1,1), input_core_state.measures_(3).measure_data(1,1,1)
+        ! # ana_core_state[self.algo.attributed_models]        
+        do i = 1, size(ana_core_state.measures_, 1)                
+            n_rea = SIZE(attributed_models)
+            !n_t = SIZE(ana_core_state.measures_(i).measure_data, 2)
+            !n_coef = SIZE(ana_core_state.measures_(i).measure_data, 3)
+            !deallocate(ana_core_state.measures_(i).measure_data)
+            !allocate(ana_core_state.measures_(i).measure_data(n_rea, n_t, n_coef))                
+            do local_idx = 1, n_rea
+
+                global_idx = attributed_models(local_idx) + 1
+
+                ana_core_state_slice.measures_(i).measure_data(local_idx,:,:) = &
+                        ana_core_state.measures_(i).measure_data(global_idx,:,:)
+
+            end do
+        end do
+        
     end subroutine
 !==========================================================================================================================
     
@@ -373,7 +396,7 @@ contains
     !:rtype: np.array (dim: nb_realisations x Nb)
     !"""
     !*****************************************************************************************************************
-        class(AugkfAnalyserAR1), intent(in) :: self
+        class(AugkfAnalyserAR1), intent(inout) :: self
         class(CoreState_type), intent(inout) :: inout_core_state
         class(ComputationConfig), intent(in) :: algo_cfg
         integer, intent(in) :: nb_realisations
@@ -381,8 +404,8 @@ contains
         REAL(kind=8), allocatable :: analysed_B(:, :)
         class(measure_observations_mat), allocatable :: mf_X(:), Hb(:), Rbb(:)
         REAL(KIND=8), allocatable :: Pbb_forecast(:,:), Kbb(:,:)
-        REAL(KIND=8), allocatable :: P_eig_val(:), P_eig_vec(:,:)
-        integer :: i_real, i, info
+        REAL(KIND=8), allocatable :: P_eig_val(:), P_eig_vec(:,:), HX_b(:,:), inv_Rbb(:,:)
+        integer :: i_real, i, info, rank, ierr
         
         allocate(mf_X, source=self.mf_X)
         !# obs operator
@@ -436,25 +459,64 @@ contains
             write(10,*) "Invalid value of param kalman_norm, should be equal to huber or l2."
         end if            
         
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            analysed_B, &
+                            SIZE(analysed_B), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
         
-        allocate(P_eig_val(SIZE(Pbb_forecast, 1)))
-        allocate(P_eig_vec, source=Pbb_forecast)
-        call syevd(P_eig_vec, P_eig_val, 'V', 'U', info)
-        P_eig_val = max(P_eig_val, 1.0d-10)
+        ! # Compute the misfits for B (Y - HX)
+        allocate(HX_b, source=TRANSPOSE(MATMUL(Hb(1).mat, TRANSPOSE(analysed_B))))
+        call max_inv(Rbb(1).mat, inv_Rbb)
+        call compute_misfit(mf_X(1).mat, HX_b, inv_Rbb, self.current_misfits(1))
+        inout_core_state.measures_(1).measure_data(:,1,:) = analysed_B
+        !print *, 'imput', inout_core_state.measures_(1).measure_data(1,1,2)
+    end subroutine
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine setup_Hz(self, Ab, Nu, algo_cfg, Hz)
+    !*****************************************************************************************************************
+    !"""
+    !Compute the matrix [Ab | I_e] where Ab is the contains the Gaunt elasser integrals,
+    !while I_e is the identity matrix of size Nsv
+    !    
+    !:param Nu: dimension of the flow
+    !:type Nu: int
+    !:return: matrix Nsv x (Nu + Ne)
+    !:rtype: numpy array
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAnalyserAR1), intent(in) :: self
+        real(kind=8), intent(in) :: Ab(:,:)
+        class(ComputationConfig), intent(in) :: algo_cfg
+        integer, intent(in) :: Nu
+        REAL(KIND=8), allocatable, intent(out) :: Hz(:, :)
+        REAL(KIND=8), allocatable :: I_e(:,:)
+        integer :: Nsv, Ne, i
         
-        do i = 1, SIZE(attributed_models)
-            i_real = attributed_models(i) + 1
-            call compute_Kalman_huber(inout_core_state.measures_(1).measure_data(i_real,1,:), &
-                                mf_X(1).mat(i_real,:), &
-                                P_eig_val, &
-                                P_eig_vec, &
-                                Hb(1).mat, &
-                                Rbb(1).mat, &
-                                50, &
-                                analysed_B(i_real,:))
+        if (SIZE(Ab, 2) .ne. Nu) then
+            write(*,*) "mismatch in dimension of Ab and flow"
+            write(10,*) "mismatch in dimension of Ab and flow"
+            stop
+        end if
+        
+        Nsv = algo_cfg.Nsv()
+        allocate(Hz(Nsv, Nu + Nsv))
+        Hz = 0.0d0
+        
+        !# Set the observation operator to A(B) for U
+        Hz(1:Nsv, 1:Nu) = Ab
+        !# and identity for E
+        allocate(I_e(Nsv, Nsv))
+        I_e = 0.0d0
+        do i = 1, Nsv
+            I_e(i, i) = algo_cfg.compute_e
         end do
         
-        !print *, P_eig_vec(2,:)
+        Hz(1:Nsv, Nu+1:Nu+Nsv) = I_e
         
     end subroutine
 !==========================================================================================================================
@@ -557,6 +619,158 @@ contains
         call diag_sq(P_forecast, D_2)
         result_ = matmul(matmul(D_2, C_lasso), D_2)
         
+    end subroutine
+!==========================================================================================================================
+    
+!========================================================================================================================== 
+    subroutine analyse_Z(self, inout_core_state, algo_cfg, nb_realisations, attributed_models, pcaU_operator, algo_avg_prior)
+    !*****************************************************************************************************************
+    !"""
+    !Returns the analysed data for the augmented state Z = [U ER] and SV by a BLUE given the observations.
+    !
+    !:param input_core_state: 2D CoreState containing the coefficient data
+    !:type input_core_state: CoreState
+    !:param sv_X: Observation data to use for the BLUE
+    !:type sv_X: Observation
+    !:param sv_H: Observation matrix to use for the BLUE
+    !:type sv_H: Observation
+    !:param sv_Rxx: Observation error to use for the BLUE
+    !:type sv_Rxx: Observation
+    !:return: 2D analysed Z U ER SV
+    !:rtype: 2D arrays (Nreal x Ncoef)
+    !
+    !"""
+    !*****************************************************************************************************************
+        class(AugkfAnalyserAR1), intent(inout) :: self
+        class(CoreState_type), intent(inout) :: inout_core_state
+        class(ComputationConfig), intent(in) :: algo_cfg
+        class(set_prior_type), intent(in) :: algo_avg_prior
+        integer, intent(in) :: nb_realisations
+        integer, intent(in) :: attributed_models(:)
+        REAL(kind=8), allocatable :: analysed_Z(:, :), analysed_SV(:, :), analysed_ER(:, :), analysed_U(:, :)
+        REAL(kind=8), allocatable :: Pzz_forecast(:, :)
+        REAL(kind=8), allocatable :: sv_X(:,:), sv_H(:,:), sv_Rxx(:,:), sv_X_real(:,:)
+        REAL(kind=8), allocatable :: Ab(:,:), S_u(:,:), setup_Hz_mat(:,:)
+        REAL(kind=8), allocatable :: complete_H(:,:), PzzHT(:,:), HPzzHT(:,:), HX_z(:,:), inv_Rzz(:,:)
+        integer :: i_real, i_idx, info, rank, ierr
+        type(input_core_state_type) :: CoreState_temp
+        class(NormedPCAOperator), intent(in) :: pcaU_operator
+        
+        
+        allocate(sv_X, source=self.sv_X(1).mat)
+        allocate(sv_H, source=self.sv_H(1).mat)
+        allocate(sv_Rxx, source=self.sv_RXX(1).mat)
+        
+        !# compute necessary matrices for Kalman filter
+        call self.remove_small_correlations(inout_core_state.measures_(5).measure_data(:,1,:), 1.0d-10, algo_cfg, Pzz_forecast)
+        
+        !initialize analysed_Z,analysed_SV,analysed_ER,analysed_U
+        allocate(analysed_Z(nb_realisations, algo_cfg.Nz()))
+        analysed_Z = 0.0d0
+        allocate(analysed_SV(nb_realisations, algo_cfg.Nsv()))
+        analysed_SV = 0.0d0
+        allocate(analysed_ER(nb_realisations, algo_cfg.Nsv()))
+        analysed_ER = 0.0d0
+        allocate(analysed_U(nb_realisations, algo_cfg.Nu2()))
+        analysed_U = 0.0d0
+        allocate(sv_X_real, source=sv_X)
+        sv_X_real = 0.0d0
+        
+        
+        do i_idx = 1, SIZE(attributed_models)
+            i_real = attributed_models(i_idx) + 1
+            
+            !# Compute A(b)
+            CoreState_temp.Lsv = inout_core_state.cs_Lsv()
+            CoreState_temp.Lu = inout_core_state.cs_Lu()
+            CoreState_temp.Lb = inout_core_state.cs_Lb()
+            CoreState_temp.Nsv = inout_core_state.cs_Nsv()
+            CoreState_temp.Nu2 = inout_core_state.cs_Nu2()
+            CoreState_temp.Nb = inout_core_state.cs_Nb()
+            if (.not. ALLOCATED(CoreState_temp.B)) allocate(CoreState_temp.B, source=inout_core_state.measures_(1).measure_data(i_real, 1, :))
+            CoreState_temp.B = inout_core_state.measures_(1).measure_data(i_real, 1, :)
+            call self.compute_Ab(CoreState_temp, Ab)
+            
+            
+            !# The complete H operator (No x Ncoefs of U) is:
+            !# Hsv (No x (Ncoefs of core + Ncoefs SV)) * Hz ((Ncoefs of core + Ncoefs SV) x Ncoefs of U)
+            if (algo_cfg.pca == 1) then
+                !# if PCA
+                call pcaU_operator.S_u(S_u)
+                call self.setup_Hz(MATMUL(Ab, S_u), algo_cfg.N_pca_u, algo_cfg, setup_Hz_mat)
+                if (.not. ALLOCATED(complete_H)) allocate(complete_H, source=MATMUL(sv_H, setup_Hz_mat))
+                complete_H = MATMUL(sv_H, setup_Hz_mat)
+            else                
+                !# if no PCA
+                call self.setup_Hz(Ab, algo_cfg.Nu2(), algo_cfg, setup_Hz_mat)
+                if (.not. ALLOCATED(complete_H)) allocate(complete_H, source=MATMUL(sv_H, setup_Hz_mat))
+                complete_H = MATMUL(sv_H, setup_Hz_mat)
+            end if
+            
+            if (.not. ALLOCATED(PzzHT)) allocate(PzzHT, source=MATMUL(Pzz_forecast, TRANSPOSE(complete_H)))
+            PzzHT = MATMUL(Pzz_forecast, TRANSPOSE(complete_H))
+            if (.not. ALLOCATED(HPzzHT)) allocate(HPzzHT, source=MATMUL(complete_H, PzzHT))
+            HPzzHT = MATMUL(complete_H, PzzHT)
+            
+            !# Z is centered on 0 so we must remove the mean from the observation data
+            !# Y = Ab (U+U0) + (ER + ER0) => Y - Ab U0 - ER0 = Ab U + ER
+            sv_X_real(i_real, :) = sv_X(i_real, :) - (MATMUL(sv_H, MATMUL(Ab, RESHAPE(algo_avg_prior.U, [SIZE(algo_avg_prior.U)]))) + MATMUL(sv_H, RESHAPE(algo_avg_prior.ER, [SIZE(algo_avg_prior.ER)])))
+            call compute_Kalman_huber_parameter_basis(inout_core_state.measures_(5).measure_data(i_real,1,:), &
+                                                        sv_X_real(i_real, :), &
+                                                        HPzzHT, PzzHT, &
+                                                        complete_H, &
+                                                        sv_Rxx, &
+                                                        'huber', 50, &
+                                                        analysed_Z(i_real,:))
+            call Z_to_U_ER1(algo_cfg, algo_avg_prior, pcaU_operator, analysed_Z(i_real,:), analysed_U(i_real,:), analysed_ER(i_real,:))
+            analysed_SV(i_real,:) = MATMUL(Ab, analysed_U(i_real,:)) + analysed_ER(i_real,:)            
+        end do
+        
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            analysed_Z, &
+                            SIZE(analysed_Z), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            analysed_U, &
+                            SIZE(analysed_U), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            analysed_SV, &
+                            SIZE(analysed_SV), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            analysed_ER, &
+                            SIZE(analysed_ER), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
+        call MPI_ALLREDUCE( MPI_IN_PLACE, &
+                            sv_X_real, &
+                            SIZE(sv_X_real), &
+                            MPI_DOUBLE_PRECISION, &
+                            MPI_SUM, &
+                            MPI_COMM_WORLD, &
+                            ierr)
+        
+        ! # Compute the misfits for SV (Y - HX)
+        allocate(HX_z, source=TRANSPOSE(MATMUL(complete_H, TRANSPOSE(analysed_Z))))
+        call max_inv(sv_Rxx, inv_Rzz)
+        call compute_misfit(sv_X_real, HX_z, inv_Rzz, self.current_misfits(2))
+        
+        inout_core_state.measures_(2).measure_data(:,1,:) = analysed_U
+        inout_core_state.measures_(3).measure_data(:,1,:) = analysed_SV
+        inout_core_state.measures_(4).measure_data(:,1,:) = analysed_ER
+        inout_core_state.measures_(5).measure_data(:,1,:) = analysed_Z        
     end subroutine
 !==========================================================================================================================
 end module

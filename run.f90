@@ -157,14 +157,14 @@ contains
         integer, intent(in) :: nb_models, do_shear, seed, logging_level
         character(len=*), intent(in) :: output_path, computation_name, config_file, log_file, algo_name    
         logical status, log_ 
-        character(len=100) :: log_path, str
+        character(len=100) :: log_path, str, folder_name
         integer :: i, val, i_t, i_analysis , idx_max, j
         real(kind=8) :: seed_float, process_rstate, ratio, t
         integer, allocatable :: attributed_models(:)
         type(AugkfAlgo) :: algo
         type(CoreState_type) :: computed_states, forecast_states, analysed_states, misfits
         type(CoreState_type) :: computed_states_slice
-        class(CoreState_type), allocatable :: forecast_states_slice, gather_computed_states
+        class(CoreState_type), allocatable :: analysed_states_slice, forecast_states_slice, gather_computed_states
         REAL(kind=8), allocatable :: Z_AR3(:,:,:)
         integer :: R
         
@@ -205,7 +205,8 @@ contains
         !----------------------------------------------------------
         !Ensure the path directory exists; create it if necessary.
         !set output folder   
-        inquire(directory=trim(output_path)//'/'//trim(computation_name), exist=status) 
+        inquire(directory=trim(output_path)//'/'//trim(computation_name), exist=status)
+        folder_name = trim(output_path)//'/'//trim(computation_name)
         ! only intel fortran have directory option
     
         if (.not. status) then
@@ -315,6 +316,7 @@ contains
             allocate(computed_states_slice.measures_(j).measure_data(SIZE(computed_states.measures_(j).measure_data, 1), 1, SIZE(computed_states.measures_(j).measure_data, 3)))
         end do
         allocate(forecast_states_slice, source=computed_states_slice)
+        allocate(analysed_states_slice, source=computed_states_slice)
         
         do while (i_t < idx_max)
             t = algo.config.t_forecasts(i_t+1)
@@ -412,15 +414,74 @@ contains
                         computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
                     end do
                     call gather_states(computed_states_slice, algo.attributed_models, comm, rank, .true., gather_computed_states)
-                    call algo.analyser_1.analysis_step(gather_computed_states, algo.config, algo.nb_realisations, algo.attributed_models)
+                    call algo.analyser_1.analysis_step(gather_computed_states, algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, analysed_states_slice)
+                    
+                    do j = 1, size(analysed_states_slice.measures_, 1)
+                        analysed_states.measures_(j).measure_data(:, (i_analysis+1):(i_analysis+1), :) = analysed_states_slice.measures_(j).measure_data
+                    end do
                 end if
                 
-            end if 
+                if (first_process()) then
+                    ! write the analysed states to the analysed_states array
+                end if
+                
+                !# Update the computed core_state array with the analysis result (overwrites forecast result)
+                do j = 1, size(analysed_states_slice.measures_, 1)
+                    computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :) = analysed_states.measures_(j).measure_data(:, (i_analysis+1):(i_analysis+1), :)
+                end do
+                
+                !# Update the misfits
+                !# misfits_data(1).key = 'MF'  misfits_data(2).key = 'SV'
+                if (trim(algo.config.AR_type) == 'AR3') then
+                    
+                else
+                    misfits.measures_(1).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_1.current_misfits(1)
+                    misfits.measures_(2).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_1.current_misfits(2)
+                end if
+                
+                ! # logging
+                write(10,'(A, i4, A)') "Analysis #", i_analysis+1, " finished !"
+                write(*,'(A, i4, A)') "Analysis #", i_analysis+1, " finished !"                
+                !print *, 'misfits', algo.analyser_1.mf_X(1).mat(1,1), algo.analyser_1.mf_X(1).mat(1,1)
+                
+                ! # Issue #70
+                ! # Exporting data  
+                if (algo.config.export_every_analysis == 1) then
+                    write(*,'(A)') "Exporting..."
+                    !# TODO: Implement HDF5 output for computed results and misfits.
+                    !# Currently, the HDF5 file creation and configuration saving are implemented,
+                    !# but numerical results have not yet been written to the output file.
+                    if (first_process()) then
+                        ! # Creating file 
+                    end if      
+                end if
+                
+            end if
             
+            if (i_analysis < algo.config.nb_analyses()) then
+                if (ABS(t - algo.config.t_analyses(i_analysis+1)) < algo.config.dt_f / 2.0d0) then !# if analysis time
+                    ! # Update the analysed core_state array with the computed core_state
+                    do j = 1, size(analysed_states_slice.measures_, 1)
+                        analysed_states.measures_(j).measure_data(:, (i_analysis+1):(i_analysis+1), :) = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
+                    end do
+                    ! # Increment i_analysis
+                    i_analysis = i_analysis + 1
+                end if
+                
+            end if                        
+            !print *, "rank", SHAPE(computed_states.measures_(1).measure_data), SHAPE(analysed_states.measures_(1).measure_data), i_t, i_analysis
+            !print *, "slice", i_analysis, algo.config.nb_analyses()
+            print *, algo.config.do_shear, "11"
         end do
+        ! # END OF ALGO TIME LOOP
+        
+        !# START SHEAR COMPUTATION
         
         
-        !print *, forecast_states_slice.measures_(1).measure_data(250, 1, 1)
+        
+        
+        !# END SHEAR COMPUTATION
+        print *, algo.config.do_shear
         !print *, t, algo.config.t_analyses(SIZE(algo.config.t_analyses, 1) - 1), algo.config.dt_f / 2.0d0
         !test parts---------------------------------------------------------------------
         print *, "test parts run--------------------------------------------"        

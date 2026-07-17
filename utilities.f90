@@ -229,8 +229,23 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================    
+    subroutine diag_(x, diag_x)
+    ! linear algebra: diag
+        real(kind=8), intent(in) :: x(:)
+        real(kind=8), allocatable, intent(out) :: diag_x(:, :)        
+        integer :: i
+        
+        allocate(diag_x(SIZE(x, 1), SIZE(x, 1)))
+        diag_x = 0.0d0
+        do i = 1, SIZE(diag_x, 1)
+            diag_x(i, i) = x(i)
+        end do
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================    
     subroutine diag_sq(x, diag_x)
-    ! matrix_inverse
+    ! matrix_diag_sq
         real(kind=8), intent(in) :: x(:, :)
         real(kind=8), allocatable, intent(out) :: diag_x(:, :)        
         integer :: i
