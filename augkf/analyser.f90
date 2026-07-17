@@ -26,8 +26,8 @@ module analyser
     contains
         procedure :: init_AugkfAnalyserAR, invalid_misfits
         procedure :: extract_observations, check_if_analysis_data
-        procedure :: sv_analysis, mf_analysis, analysis_step, analyse_B
-        procedure :: remove_small_correlations
+        procedure :: sv_analysis, mf_analysis, analysis_step, analyse_B, analyse_Z
+        procedure :: remove_small_correlations, setup_Hz
     end type AugkfAnalyserAR1
     
     type, extends(AugkfAnalyserAR1),public :: AugkfAnalyserAR3
@@ -300,7 +300,7 @@ contains
 !==========================================================================================================================
 
 !========================================================================================================================== 
-    subroutine analysis_step(self, input_core_state, algo_cfg, nb_realisations, attributed_models)
+    subroutine analysis_step(self, input_core_state, algo_cfg, nb_realisations, attributed_models, pcaU_operator, algo_avg_prior, ana_core_state_slice)
     !*****************************************************************************************************************
     !""" Does the analysis at time t on the B and Z=[UE] part of the input_core_state.
     !Updates SV = A(B)U - ER in consequence.
