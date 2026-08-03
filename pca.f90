@@ -146,10 +146,23 @@ contains
         self.sklearn_operator_components = vt(1:self.config.N_pca_u,:)
         self.sklearn_operator_mean = mean_X
         
-        do i = 1, self.config.N_pca_u
-            idx = maxloc(abs(self.sklearn_operator_components(i,:)))
-            if (self.sklearn_operator_components(i,idx(1)) <=0 ) self.sklearn_operator_components(i, :) = self.sklearn_operator_components(i, :) * (-1.0d0)
-        end do       
+        !do i = 1, self.config.N_pca_u
+        !    idx = maxloc(abs(self.sklearn_operator_components(i,:)))
+        !    if (self.sklearn_operator_components(i,idx(1)) <=0 ) self.sklearn_operator_components(i, :) = self.sklearn_operator_components(i, :) * (-1.0d0)
+        !end do
+        
+        ! Match sklearn.utils.extmath.svd_flip
+        do i = 1, self.config.N_pca_u            
+            ! Match sklearn.utils.extmath.svd_flip:
+            ! determine the sign from the largest absolute element
+            ! in column i of the left singular-vector matrix U.
+            idx = maxloc(abs(u(:,i)))
+
+            if (u(idx(1),i) < 0.0d0) then
+                self.sklearn_operator_components(i,:) = &
+                    -self.sklearn_operator_components(i,:)
+            end if
+        end do
 
     end subroutine
 !==========================================================================================================================

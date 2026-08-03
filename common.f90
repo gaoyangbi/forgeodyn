@@ -1,5 +1,6 @@
 module common
     use utilities
+    use deterministic_rng, only: normal_vector, RNG_FORECAST
     use linear_interpolation_module
     use blas95
     use lapack95
@@ -365,8 +366,9 @@ contains
             !# conditions to break the loop to make it faster
             if (all(W == ones_min)) exit
             
+            ! Python-compatible stopping criterion for comparison
             if (i > 1 .and. maxval(abs(W - prev_W)) < 1.0e-4 * maxval(W)) exit
-            
+            !if (i > 1 .and. maxval(W - prev_W) < 1.0e-4 * maxval(W)) exit
         end do
     end subroutine    
 !==========================================================================================================================
@@ -776,7 +778,7 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================
-    subroutine ar1_process(X, A, Chol, random_state, check_Cholesky, AR1_result)
+    subroutine ar1_process(X, A, Chol, global_seed, global_i_real, i_t, check_Cholesky, AR1_result)
         !"""
         !Applies an Auto-Regressive process of order 1 to the augmented state Z.
         !
@@ -786,8 +788,12 @@ contains
         !:type X: 1D numpy.ndarray (dim: Nz)
         !:param A: AR-1 operator (can be diagonal or dense)
         !:type A: 2D numpy.ndarray (dim: Nz x Nz)
-        !:param random_state: RandomState to use for normal distribution draw. If None (default), draws will be done with np.random.normal.
-        !:type: None or numpy.random.RandomState
+        !:param global_seed: global random seed
+        !:type global_seed: int
+        !:param global_i_real: global model realisation index
+        !:type global_i_real: int
+        !:param i_t: time index
+        !:type i_t: int
         !:param check_Cholesky: If True (default), checks that the Cholesky is lower triangular. Setting to False may enhance performance.
         !:type: bool
         !:return: vector containing the result of the AR-1 process (X1 above)
@@ -796,7 +802,7 @@ contains
         real(kind=8), intent(in) :: X(:)
         real(kind=8), intent(in) :: A(:,:), Chol(:,:)
         real(kind=8), allocatable, intent(out) :: AR1_result(:)
-        integer, intent(in) :: random_state
+        integer, intent(in) :: global_seed, global_i_real, i_t
         logical, intent(in) :: check_Cholesky
         integer :: Ncoef, i, j
         real(kind=8), allocatable :: normal_noise(:), Chol_test(:,:)
@@ -814,7 +820,7 @@ contains
             end do
         end do
         if (check_Cholesky)then
-            if (ANY((Chol_test-Chol) /= 0.0d0)) then
+            if (ANY(ABS(Chol_test-Chol) > 1.0d-12)) then
                 write (10,'(A)')  'Cholesky matrix supplied in AR-1 is not a lower triangular matrix ! Did you supply the upper Cholesky matrix instead ?'
                 write (*,'(A)') 'Cholesky matrix supplied in AR-1 is not a lower triangular matrix ! Did you supply the upper Cholesky matrix instead ?'
                 stop
@@ -822,13 +828,144 @@ contains
         end if     
         
         !# Returns samples of the same size as qty from normal distribution with zero mean and unit variance N(0,1)
-        call RANDOM_SEED(put=[random_state])
-        call randn_vec(normal_noise, Ncoef)
+        allocate(normal_noise(Ncoef))
+        call normal_vector(global_seed, RNG_FORECAST, global_i_real, i_t, normal_noise)
         
         !build a scaled noise
         !# Compute qty at t+1 from qty at t and the scaled noise (Euler-Maruyama)
         allocate(AR1_result(Ncoef), source=0.0d0)
-        AR1_result = MATMUL(-A, X) + MATMUL(Chol, normal_noise)
+        AR1_result = -MATMUL(X, A) + MATMUL(Chol, normal_noise)
+    end subroutine
+!==========================================================================================================================
+    
+!==========================================================================================================================
+    subroutine ar3_process(X, A, B, C, Chol, global_seed, global_i_real, i_t, check_Cholesky, AR3_result)
+    !"""
+    !Applies an Auto-Regressive process of order 3 to the augmented state Z.
+    !
+    !X3 = - X2 @ A - X1 @ B - X0 @ C + Chol @ normal_noise
+    !
+    !:param X: quantity on which the AR-3 process will be applied (X0, X1, X2 above)
+    !:type X: 2D numpy.ndarray (dim: 3 x Nz)
+    !:param A: AR-3 operator (must be dense)
+    !:type A: 2D numpy.ndarray (dim: Nz x Nz)
+    !:param B: AR-3 operator (must be dense)
+    !:type B: 2D numpy.ndarray (dim: Nz x Nz)
+    !:param C: AR-3 operator (must be dense)
+    !:type C: 2D numpy.ndarray (dim: Nz x Nz)
+    !:param global_seed: global random seed
+    !:type global_seed: int
+    !:param global_i_real: global model realisation index
+    !:type global_i_real: int
+    !:param i_t: time index
+    !:type i_t: int
+    !:param check_Cholesky: If True, checks that the Cholesky matrix is lower triangular.
+    !:type check_Cholesky: bool
+    !:return: vector containing the result of the AR-3 process
+    !:rtype: 1D numpy.ndarray (dim: Nz)
+    !"""
+        real(kind=8), intent(in) :: X(:,:)
+        real(kind=8), intent(in) :: A(:,:), B(:,:), C(:,:), Chol(:,:)
+        real(kind=8), allocatable, intent(out) :: AR3_result(:)
+        integer, intent(in) :: global_seed, global_i_real, i_t
+        logical, intent(in) :: check_Cholesky
+
+        integer :: Ncoef, i, j
+        real(kind=8), allocatable :: normal_noise(:), Chol_test(:,:)
+
+        Ncoef = SIZE(X, 2)
+
+        !# X must contain the three previous AR states
+        if (SIZE(X, 1) .ne. 3) then
+            write (10,'(A, i4, A)') &
+                'First dimension of input quantity in AR-3 process should be 3. Got ', &
+                SIZE(X, 1), ' instead.'
+            write (*,'(A, i4, A)') &
+                'First dimension of input quantity in AR-3 process should be 3. Got ', &
+                SIZE(X, 1), ' instead.'
+            stop
+        end if
+
+        !# Check dimensions of A
+        if ((SIZE(A, 1) .ne. Ncoef) .or. (SIZE(A, 2) .ne. Ncoef)) then
+            write (10,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'A matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(A, 1), ',', SIZE(A, 2), ') instead.'
+            write (*,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'A matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(A, 1), ',', SIZE(A, 2), ') instead.'
+            stop
+        end if
+
+        !# Check dimensions of B
+        if ((SIZE(B, 1) .ne. Ncoef) .or. (SIZE(B, 2) .ne. Ncoef)) then
+            write (10,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'B matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(B, 1), ',', SIZE(B, 2), ') instead.'
+            write (*,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'B matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(B, 1), ',', SIZE(B, 2), ') instead.'
+            stop
+        end if
+
+        !# Check dimensions of C
+        if ((SIZE(C, 1) .ne. Ncoef) .or. (SIZE(C, 2) .ne. Ncoef)) then
+            write (10,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'C matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(C, 1), ',', SIZE(C, 2), ') instead.'
+            write (*,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'C matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(C, 1), ',', SIZE(C, 2), ') instead.'
+            stop
+        end if
+
+        !# Check dimensions of Chol
+        if ((SIZE(Chol, 1) .ne. Ncoef) .or. (SIZE(Chol, 2) .ne. Ncoef)) then
+            write (10,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'Cholesky matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(Chol, 1), ',', SIZE(Chol, 2), ') instead.'
+            write (*,'(A, i4, A, i4, A, i4, A, i4, A)') &
+                'Cholesky matrix in AR-3 should have dimensions (', Ncoef, ',', Ncoef, &
+                '). Got (', SIZE(Chol, 1), ',', SIZE(Chol, 2), ') instead.'
+            stop
+        end if
+
+        !# Check that Chol is lower triangular
+        if (check_Cholesky) then
+            allocate(Chol_test, source=Chol)
+
+            do i = 1, SIZE(Chol_test, 1)
+                do j = i+1, SIZE(Chol_test, 2)
+                    Chol_test(i,j) = 0.0d0
+                end do
+            end do
+
+            if (ANY(ABS(Chol_test-Chol) > 1.0d-12)) then
+                write (10,'(A)') &
+                    'Cholesky matrix supplied in AR-3 is not a lower triangular matrix !'
+                write (*,'(A)') &
+                    'Cholesky matrix supplied in AR-3 is not a lower triangular matrix !'
+                stop
+            end if
+        end if
+
+        !# Returns samples from the normal distribution N(0,1)
+        allocate(normal_noise(Ncoef))
+        call normal_vector( &
+            global_seed,       &
+            RNG_FORECAST,      &
+            global_i_real,     &
+            i_t,               &
+            normal_noise       &
+        )
+
+        !# Compute X3 from X0, X1 and X2 with the scaled noise
+        allocate(AR3_result(Ncoef), source=0.0d0)
+
+        AR3_result = -MATMUL(X(3,:), A) &
+                     -MATMUL(X(2,:), B) &
+                     -MATMUL(X(1,:), C) &
+                   + MATMUL(Chol, normal_noise)      
     end subroutine
 !==========================================================================================================================
     

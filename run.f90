@@ -5,6 +5,7 @@ module run
     use computer
     use observations
     use analyser
+    use writes
     implicit none
     private
     !to improve performance in parrallel
@@ -15,7 +16,45 @@ module run
     public :: algorithm
     
     
-contains
+    contains
+!==========================================================================================================================
+    subroutine send_receive(corestate, comm, rank, attributed_models, corestate_gather)
+    !***************************************************************************************************************"""
+    !Gather corestate to rank 0 (and broadcast to all ranks if do_bcast=True) 
+    !without comm.Gather that had issues with large matrices
+    !
+    !:param corestate: Corestate to be gathered
+    !:type corestate: Cs.Corestate
+    !:param comm: MPI communicator
+    !:type comm: MPI.comm
+    !:param rank: process rank
+    !:type rank: int
+    !:type attributed_models: 1D numpy array
+    !*****************************************************************************************************************"""
+        class(CoreState_type), intent(in) :: corestate
+        integer, intent(in) :: comm, rank
+        integer, intent(in) :: attributed_models(:)
+        class(CoreState_type), intent(out) :: corestate_gather
+        integer :: ierr, i, j, nprocs, n_rea, n_t, n_coef
+        
+        call MPI_COMM_SIZE(comm, nprocs, ierr)
+        
+        
+        if (rank == 0) then
+            allocate(corestate_gather.measures_, source=corestate.measures_)
+            allocate(corestate_gather.max_degrees_, source=corestate.max_degrees_)         
+            do j = 1, size(corestate_gather.measures_, 1)
+                deallocate(corestate_gather.measures_(j).measure_data)
+                n_rea = SIZE(corestate.measures_(j).measure_data, 1) * nprocs
+                n_t   = SIZE(corestate.measures_(j).measure_data, 2)
+                n_coef = SIZE(corestate.measures_(j).measure_data, 3)
+                allocate(corestate_gather.measures_(j).measure_data(n_rea, n_t, n_coef))
+            end do
+        end if
+        
+        
+    
+    end subroutine
 !==========================================================================================================================
     
 !==========================================================================================================================
@@ -157,14 +196,16 @@ contains
         integer, intent(in) :: nb_models, do_shear, seed, logging_level
         character(len=*), intent(in) :: output_path, computation_name, config_file, log_file, algo_name    
         logical status, log_ 
-        character(len=100) :: log_path, str, folder_name
-        integer :: i, val, i_t, i_analysis , idx_max, j
-        real(kind=8) :: seed_float, process_rstate, ratio, t
+        character(len=300) :: log_path, str, folder_name, output_file
+        integer :: i, val, i_t, i_analysis , idx_max, j, ratio
+        real(kind=8) :: seed_float, process_rstate, t
         integer, allocatable :: attributed_models(:)
         type(AugkfAlgo) :: algo
         type(CoreState_type) :: computed_states, forecast_states, analysed_states, misfits
         type(CoreState_type) :: computed_states_slice
         class(CoreState_type), allocatable :: analysed_states_slice, forecast_states_slice, gather_computed_states
+        class(CoreState_type), allocatable :: computed_states_window
+        class(CoreState_type), allocatable :: analysed_states_gather, forecast_states_gather, computed_states_gather
         REAL(kind=8), allocatable :: Z_AR3(:,:,:)
         integer :: R
         
@@ -174,7 +215,8 @@ contains
         integer, allocatable :: process_seeds(:)
         integer :: seed_put(1)
         integer :: pseed
-        logical :: flag 
+        logical :: flag, do_backward_analysis
+        integer :: window_start, window_end
         !-----------------------------------
         
         ! test part-------------------------
@@ -214,7 +256,7 @@ contains
         end if
         !----------------------------------------------------------
         
-        
+
         !Set log---------------------------------------------------
         write(str, '(I0)') rank
         log_path = TRIM(output_path) // '/' // TRIM(computation_name) // '/' // TRIM(log_file) // TRIM(str) // '.txt'
@@ -285,12 +327,12 @@ contains
         !---------------------------------------------------------------------------
         
         ! Set algo
-        call choose_algorithm(algo_name, config_file, nb_models, pseed, attributed_models, do_shear, algo)
+        call choose_algorithm(algo_name, config_file, nb_models, seed, attributed_models, do_shear, algo)
         !===========================================================================
         
-        !# Initialization of states is done in each process 
+        !# Initialization of states is done in each process using the global seed
         !# Each process has its own attributed models so that there is less transfer of arrays
-        call algo.init_corestates(process_rstate, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
+        call algo.init_corestates(seed, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
         
         if (first_process()) then
             write(10,'(A, *(F7.2,1X))') "Forecast will be performed at following times: ", algo.config.t_forecasts
@@ -344,7 +386,7 @@ contains
             
             !# Adapt forecast range R to eventual analysis and AR type
             if ((TRIM(algo.config.AR_type) == "AR3")) then
-                if (algo.analyser_3.sv_analysis())then
+                if (algo.analyser_3.sv_analysis() .or. algo.analyser_3.mf_analysis()) then
                     R = 2*ratio
                 else
                     R = ratio
@@ -370,9 +412,21 @@ contains
                 
                 ! # Compute forecast 
                 if (trim(algo.config.AR_type) == 'AR3') then
-                    !call algo.forecaster_3.parallel_forecast_step_AR3(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states, pseed, i_t, forecast_states)
+                    call algo.forecaster_3.parallel_forecast_step_AR3( &
+                        algo.config,             &
+                        algo.nb_realisations,    &
+                        algo.attributed_models,  &
+                        algo.pcaU_operator,      &
+                        algo.avg_prior,          &
+                        algo.cov_prior,          &
+                        computed_states_slice,   &
+                        Z_AR3,                   &
+                        seed,                    &
+                        i_t,                     &
+                        forecast_states_slice    &
+                    )
                 else
-                    call algo.forecaster_1.parallel_forecast_step_AR1(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states_slice, pseed, 1, forecast_states_slice)
+                    call algo.forecaster_1.parallel_forecast_step_AR1(algo.config, algo.nb_realisations, algo.attributed_models, algo.pcaU_operator, algo.avg_prior, algo.cov_prior, computed_states_slice, seed, i_t, forecast_states_slice)
                 end if
                 
                 ! # Update the computed core_state array with the forecast result
@@ -384,7 +438,7 @@ contains
             
             !# ANALYSIS
             if ((trim(algo.config.AR_type) == 'AR3')) then
-                if (algo.analyser_3.sv_analysis()) then
+                if (algo.analyser_3.sv_analysis() .or. algo.analyser_3.mf_analysis()) then
                     ! # Set i_t back from t_a+ to t_a
                     i_t = i_t - ratio
                     t = algo.config.t_forecasts(i_t+1)
@@ -405,10 +459,75 @@ contains
                 !# Compute analysis
                 if (trim(algo.config.AR_type) == 'AR3') then
                     !# Gather computed_states to get all realisations for analysis
-
                     !# Issue #79
                     !# Doing backward analysis step for the last analysis
                     !# Avoiding biased forecast
+                    do_backward_analysis = .false.
+                    if (algo.config.last_analysis_backward == 1) then
+                        if (ABS(t - algo.config.t_analyses(SIZE(algo.config.t_analyses))) &
+                            < algo.config.dt_f / 2.0d0) then
+                            do_backward_analysis = .true.
+                            write (10,'(A)') 'Performing an analysis using backward scheme.'
+                            write (*,'(A)') 'Performing an analysis using backward scheme.'
+                        end if
+                    end if
+
+                    if (do_backward_analysis) then
+                        window_start = i_t - 2*ratio + 1
+                        window_end = i_t + 1
+                    else
+                        window_start = i_t - ratio + 1
+                        window_end = i_t + ratio + 1
+                    end if
+
+                    if (window_start < 1 .or. &
+                        window_end > SIZE(computed_states.measures_(1).measure_data, 2)) then
+                        write (10,'(A,2I8)') 'Invalid AR3 analysis window: ', window_start, window_end
+                        write (*,'(A,2I8)') 'Invalid AR3 analysis window: ', window_start, window_end
+                        stop
+                    end if
+
+                    if (ALLOCATED(computed_states_window)) deallocate(computed_states_window)
+                    allocate(computed_states_window, source=computed_states_slice)
+                    do j = 1, SIZE(computed_states_window.measures_)
+                        deallocate(computed_states_window.measures_(j).measure_data)
+                        allocate( &
+                            computed_states_window.measures_(j).measure_data( &
+                                SIZE(attributed_models),                    &
+                                2*ratio+1,                                 &
+                                SIZE(computed_states.measures_(j).measure_data, 3) &
+                            ),                                             &
+                            source=computed_states.measures_(j).measure_data( &
+                                :, window_start:window_end, :               &
+                            )                                              &
+                        )
+                    end do
+
+                    call gather_states( &
+                        computed_states_window,       &
+                        algo.attributed_models,       &
+                        comm,                         &
+                        rank,                         &
+                        .true.,                       &
+                        gather_computed_states        &
+                    )
+                    call algo.analyser_3.analysis_step_AR3( &
+                        gather_computed_states,       &
+                        Z_AR3,                        &
+                        do_backward_analysis,         &
+                        algo.config,                  &
+                        algo.nb_realisations,         &
+                        algo.attributed_models,       &
+                        algo.pcaU_operator,           &
+                        algo.avg_prior,               &
+                        analysed_states_slice         &
+                    )
+
+                    do j = 1, SIZE(analysed_states_slice.measures_)
+                        analysed_states.measures_(j).measure_data( &
+                            :, i_analysis+1:i_analysis+1, :) =      &
+                            analysed_states_slice.measures_(j).measure_data
+                    end do
                 else
                     do j = 1, size(computed_states_slice.measures_, 1)
                         computed_states_slice.measures_(j).measure_data = computed_states.measures_(j).measure_data(:, (i_t+1):(i_t+1), :)
@@ -433,7 +552,8 @@ contains
                 !# Update the misfits
                 !# misfits_data(1).key = 'MF'  misfits_data(2).key = 'SV'
                 if (trim(algo.config.AR_type) == 'AR3') then
-                    
+                    misfits.measures_(1).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_3.current_misfits(1)
+                    misfits.measures_(2).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_3.current_misfits(2)
                 else
                     misfits.measures_(1).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_1.current_misfits(1)
                     misfits.measures_(2).measure_data(:, (i_analysis+1):(i_analysis+1), :) = algo.analyser_1.current_misfits(2)
@@ -441,7 +561,7 @@ contains
                 
                 ! # logging
                 write(10,'(A, i4, A)') "Analysis #", i_analysis+1, " finished !"
-                write(*,'(A, i4, A)') "Analysis #", i_analysis+1, " finished !"                
+                write(*,'(A, i4, A)') "Analysis #", i_analysis+1, " finished !"     
                 !print *, 'misfits', algo.analyser_1.mf_X(1).mat(1,1), algo.analyser_1.mf_X(1).mat(1,1)
                 
                 ! # Issue #70
@@ -469,9 +589,6 @@ contains
                 end if
                 
             end if                        
-            !print *, "rank", SHAPE(computed_states.measures_(1).measure_data), SHAPE(analysed_states.measures_(1).measure_data), i_t, i_analysis
-            !print *, "slice", i_analysis, algo.config.nb_analyses()
-            print *, algo.config.do_shear, "11"
         end do
         ! # END OF ALGO TIME LOOP
         
@@ -481,19 +598,40 @@ contains
         
         
         !# END SHEAR COMPUTATION
-        print *, algo.config.do_shear
-        !print *, t, algo.config.t_analyses(SIZE(algo.config.t_analyses, 1) - 1), algo.config.dt_f / 2.0d0
-        !test parts---------------------------------------------------------------------
-        print *, "test parts run--------------------------------------------"        
-        if (rank==0) then
-            call algo.config.save_hdf5("D:\VS\program_Fortran\pygeodyn_fortran\test.hdf5")
+        
+        !# gather computed_states, analysed_states, forecast_states to rank 0 for saving
+        call gather_states(computed_states, algo.attributed_models, comm, rank, .true., computed_states_gather)
+        call gather_states(analysed_states, algo.attributed_models, comm, rank, .true., analysed_states_gather)
+        call gather_states(forecast_states, algo.attributed_models, comm, rank, .true., forecast_states_gather)
+        
+        if (first_process()) then
+            ! # Create FileHandlers for saving
+            output_file = trim(folder_name)//'/'//trim(computation_name)//'.hdf5'
+            call algo.config.save_hdf5(TRIM(output_file))
+            
+            ! # Save requested output groups
+            if (algo.config.out_computed == 1) then
+                call write_hdf5( &
+                    computed_states_gather, algo.config.t_forecasts, output_file, "computed", "float64", &
+                    [character(len=8) :: "Z", "S", "dUdt", "dERdt", "d2Udt2", "d2ERdt2"] &
+                )
+            end if
+            if (algo.config.out_forecast == 1) then
+                call write_hdf5( &
+                    forecast_states_gather, algo.config.t_forecasts, output_file, "forecast", "float64", &
+                    [character(len=8) :: "Z", "S", "dUdt", "dERdt", "d2Udt2", "d2ERdt2"] &
+                )
+            end if
+            if (algo.config.out_analysis == 1) then
+                call write_hdf5( &
+                    analysed_states_gather, algo.config.t_analyses, output_file, "analysed", "float64", &
+                    [character(len=1) :: "Z"] &
+                )
+            end if
+            if (algo.config.out_misfits == 1) then
+                call write_hdf5(misfits, algo.config.t_analyses, output_file, "misfits", "float64")
+            end if
         end if
-        
-        print *, "test parts run--------------------------------------------"
-        !---------------------------------------------------------------------------
-        
-        
-        
         !----------------------------------------------------------
         call MPI_FINALIZE (ierr)
         deallocate(process_seeds, attributed_models)

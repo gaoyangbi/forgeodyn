@@ -1,5 +1,7 @@
 module corestate
     use common
+    use deterministic_rng, only: normal_vector, RNG_INIT_B, RNG_INIT_Z, &
+                                 RNG_INIT_DZ, RNG_INIT_D2Z
     use utilities
     use config
     use computer
@@ -133,7 +135,7 @@ contains
 !==========================================================================================================================
     
 !==========================================================================================================================  
-    subroutine initialise_from_noised_priors(self, random_state, algo_config, algo_attributed_models, algo_avg_prior, algo_cov_prior, algo_analyser, algo_pcaU, Z_AR3)
+    subroutine initialise_from_noised_priors(self, global_seed, algo_config, algo_attributed_models, algo_avg_prior, algo_cov_prior, algo_analyser, algo_pcaU, Z_AR3)
     !*****************************************************************************************************************
     !"""
     !Initialise the core state Z MF U ER SV at t=0 from the CoreState in a file at a given date.
@@ -148,7 +150,7 @@ contains
     !"""
     !*****************************************************************************************************************
         class(CoreState_type), intent(inout) :: self
-        real(kind=8), intent(in) :: random_state
+        integer, intent(in) :: global_seed
         class(ComputationConfig), intent(in) :: algo_config
         integer, intent(in) :: algo_attributed_models(:)
         class(set_prior_type), intent(in) :: algo_avg_prior
@@ -158,7 +160,7 @@ contains
         real(kind=8), allocatable, intent(out) :: Z_AR3(:,:,:)
         real(kind=8), allocatable :: avg_b(:,:), L_bb(:,:), L_zz(:,:), L_dzdz(:,:), L_d2zd2z(:,:)
         character(len=10) :: AR_type
-        integer :: Nz, info, i, j, i_idx
+        integer :: Nz, info, i, j, i_idx, global_i_real
         real(kind=8) :: dt_f
         real(kind=8), allocatable :: w_b(:), w_z(:), w_dz(:,:), w_d2z(:,:)
         real(kind=8), allocatable :: dZ(:,:), d2Z(:,:), AbT(:,:)
@@ -201,9 +203,6 @@ contains
         end do
         !$omp end parallel do
         
-        !# Set random draw
-        call random_seed(put=[INT(random_state*50000)])
-
         !# Loop over attributed models
         CoreState_temp.Lsv = self.cs_Lsv()
         CoreState_temp.Lu = self.cs_Lu()
@@ -212,10 +211,12 @@ contains
         CoreState_temp.Nu2 = self.cs_Nu2()
         CoreState_temp.Nb = self.cs_Nb()
         allocate(CoreState_temp.B, source = RESHAPE(avg_b, [SIZE(avg_b)]))
+        allocate(w_b(algo_config.Nb()), w_z(Nz))
         do i_idx = 1, SIZE(algo_attributed_models)
-            !# Set normal draw
-            call randn_vec(w_b, algo_config.Nb())
-            call randn_vec(w_z, Nz)
+            !# Use the global model index so draws do not depend on MPI partitioning
+            global_i_real = algo_attributed_models(i_idx)
+            call normal_vector(global_seed, RNG_INIT_B, global_i_real, 0, w_b)
+            call normal_vector(global_seed, RNG_INIT_Z, global_i_real, 0, w_z)
             
             !# Initialise B part of core state by normal distrib N(mean_b, sigma_b)
             self.measures_(1).measure_data(i_idx, 1, :) = RESHAPE(avg_b, [SIZE(avg_b)]) + matmul(L_bb, w_b)
@@ -231,9 +232,19 @@ contains
         
         allocate(Z_AR3(SIZE(algo_attributed_models), 3, Nz), source=0.0d0)
         if (trim(AR_type) == "AR3") then
-            !# Compute Z_AR3
-            call randn_mat(w_dz, SIZE(algo_attributed_models), Nz)
-            call randn_mat(w_d2z, SIZE(algo_attributed_models), Nz)
+            !# Draw the initial Z derivatives from independent deterministic
+            !# streams.  Use the global realization index so the draws do not
+            !# depend on how realizations are partitioned between MPI ranks.
+            allocate(w_dz(SIZE(algo_attributed_models), Nz))
+            allocate(w_d2z(SIZE(algo_attributed_models), Nz))
+            do i_idx = 1, SIZE(algo_attributed_models)
+                global_i_real = algo_attributed_models(i_idx)
+                call normal_vector(global_seed, RNG_INIT_DZ, global_i_real, 0, &
+                                   w_dz(i_idx,:))
+                call normal_vector(global_seed, RNG_INIT_D2Z, global_i_real, 0, &
+                                   w_d2z(i_idx,:))
+            end do
+
             !# Set dZ d2Z normal distribution
             allocate(dZ(SIZE(w_dz, 1), SIZE(L_dzdz, 1)), source=0.0d0)
             allocate(d2Z(SIZE(w_d2z, 1), SIZE(L_d2zd2z, 1)), source=0.0d0)

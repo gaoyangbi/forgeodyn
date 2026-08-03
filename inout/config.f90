@@ -526,12 +526,13 @@ contains
         CALL h5open_f(hdferr)
         
         !Ensure the path directory exists; create it if necessary.
-        inquire(file=hdf5file, exist=status) 
+        !inquire(file=hdf5file, exist=status) 
         ! only intel fortran have directory option
     
-        if (.not. status) then
-            call h5fcreate_f(hdf5file, H5F_ACC_TRUNC_F, file_id, hdferr)            
-        end if
+        !if (.not. status) then
+        !    call h5fcreate_f(hdf5file, H5F_ACC_TRUNC_F, file_id, hdferr)            
+        !end if
+        call h5fcreate_f(hdf5file, H5F_ACC_TRUNC_F, file_id, hdferr)
         
         ! Open file
         CALL h5fopen_f(hdf5file, H5F_ACC_RDWR_F, file_id, hdferr)  

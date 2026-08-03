@@ -16,11 +16,11 @@ module generic_algo
     end type 
     
     abstract interface
-        subroutine init_corestates_iface(self, random_state, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
+        subroutine init_corestates_iface(self, global_seed, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
             use corestate
             import :: GenericAlgo
             class(GenericAlgo), intent(inout) :: self
-            real(kind=8), intent(in) :: random_state
+            integer, intent(in) :: global_seed
             type(CoreState_type), intent(out) :: computed_states, forecast_states, analysed_states, misfits
             REAL(kind=8), allocatable, intent(out) :: Z_AR3(:,:,:)
         end subroutine

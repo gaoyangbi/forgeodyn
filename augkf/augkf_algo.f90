@@ -166,20 +166,20 @@ contains
 !==========================================================================================================================
 
 !==========================================================================================================================    
-    subroutine init_corestates(self, random_state, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
+    subroutine init_corestates(self, global_seed, computed_states, forecast_states, analysed_states, misfits, Z_AR3)
     !*****************************************************************************************************************
     !"""
     !Sets up the corestates needed for the AugKF algorithm.
     !Returns CoreStates of the adequate form and initialisation to perform the AugKF.
     !
-    !:param random_state: Random state to use for normal draw (only used when init from noised priors)
-    !:type random_state: np.random.RandomState
+    !:param global_seed: global random seed
+    !:type global_seed: int
     !:return: computed_states, forecast_states, analysed_states, misfits, Z_AR3
     !:rtype: CoreState, CoreState, CoreState, CoreState, 3D numpy array (N_real x 3 x Ncoef) or None (if not AR3)
     !"""
     !*****************************************************************************************************************
         class(AugkfAlgo), intent(inout) :: self
-        real(kind=8), intent(in) :: random_state
+        integer, intent(in) :: global_seed
         type(corestate_measures_type) :: corestate_measures
         class(key_measures), allocatable :: computed_states_data(:), analysed_states_data(:), misfits_data(:)
         type(CoreState_type), intent(out) :: computed_states, forecast_states, analysed_states, misfits
@@ -354,9 +354,9 @@ contains
             str_init = self.config.init_file
         else
             if (trim(self.config.AR_type) == "AR3") then
-                call computed_states.initialise_from_noised_priors(random_state, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_3, self.pcaU_operator, Z_AR3)
+                call computed_states.initialise_from_noised_priors(global_seed, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_3, self.pcaU_operator, Z_AR3)
             else
-                call computed_states.initialise_from_noised_priors(random_state, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_1, self.pcaU_operator, Z_AR3)
+                call computed_states.initialise_from_noised_priors(global_seed, self.config, self.attributed_models, self.avg_prior, self.cov_prior, self.analyser_1, self.pcaU_operator, Z_AR3)
             end if    
             str_init = 'normal draw around average priors'
         end if
