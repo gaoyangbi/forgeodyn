@@ -47,6 +47,7 @@
     path_flag = .false.
     cname_flag= .false.
     l_flag    = .false.
+    skip_count = 0
     !------------------------------get the command_argument
     num_args = command_argument_count()
      
@@ -159,12 +160,12 @@
                     print *, "Error: -path requires a value"
                     stop
                 end if
-                call get_command_argument(i+1, arg)
-                path = TRIM(arg)
-                if (ios /= 0) then
+                call get_command_argument(i+1, arg, status=status)
+                if (status /= 0) then
                     print *, "Error: invalid value for -path"
                     stop
                 end if
+                path = TRIM(arg)
                 skip_count = 1
                 
             case ("-cname")
