@@ -16,6 +16,7 @@
     
     use utilities
     use run
+    use HDF5
     implicit none
 
     ! Variables
@@ -25,7 +26,7 @@
     integer :: shear = 0
     integer :: seed = 10
     integer :: d = 2    
-    integer :: ios, skip_count
+    integer :: ios, skip_count, hdferr
     
     character(len=100) :: conf = 'con_file.txt'
     character(len=100) :: algo = 'augkf'
@@ -282,7 +283,21 @@
     !    
     !end do    
 
+    ! Initialize the HDF5 Fortran interface once for the whole computation.
+    call h5open_f(hdferr)
+    if (hdferr /= 0) then
+        print *, "Error: failed to initialize the HDF5 Fortran interface"
+        stop
+    end if
+
     call algorithm(path, cname, conf, m, shear, seed, l, d, algo)
+
+    ! Close the HDF5 Fortran interface after all HDF5 operations are complete.
+    call h5close_f(hdferr)
+    if (hdferr /= 0) then
+        print *, "Error: failed to close the HDF5 Fortran interface"
+        stop
+    end if
     
     
     !

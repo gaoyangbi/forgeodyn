@@ -178,13 +178,17 @@ contains
         allocate(L_bb, source=algo_cov_prior.B_B)
         allocate(L_zz, source=algo_cov_prior.Z_Z)
         call potrf(L_bb, 'L', info)
+        if (info /= 0) error stop "POTRF(B_B) failed during state initialisation"
         call potrf(L_zz, 'L', info)
+        if (info /= 0) error stop "POTRF(Z_Z) failed during state initialisation"
         
         if (trim(AR_type) == "AR3") then
             allocate(L_dzdz, source=algo_cov_prior.dZ_dZ)
             allocate(L_d2zd2z, source=algo_cov_prior.d2Z_d2Z)
             call potrf(L_dzdz, 'L', info)
+            if (info /= 0) error stop "POTRF(dZ_dZ) failed during state initialisation"
             call potrf(L_d2zd2z, 'L', info)
+            if (info /= 0) error stop "POTRF(d2Z_d2Z) failed during state initialisation"
         end if
            
         !$omp parallel do schedule(static)

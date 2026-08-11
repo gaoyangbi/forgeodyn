@@ -49,7 +49,6 @@ contains
         integer :: ierr, i, j
         logical :: is_excluded
         
-        call h5open_f(ierr)
         
         call h5fopen_f( &
             trim(hdf5_file), &
@@ -90,7 +89,6 @@ contains
         
         call h5gclose_f(group_id,ierr)
         call h5fclose_f(file_id,ierr)
-        call h5close_f(ierr)
     end subroutine
 !==========================================================================================================================    
 

@@ -522,8 +522,6 @@ contains
         INTEGER(HSIZE_T), allocatable :: dims(:)
         logical :: attr_exists, status
         
-        ! Initialize FORTRAN interface.
-        CALL h5open_f(hdferr)
         
         !Ensure the path directory exists; create it if necessary.
         !inquire(file=hdf5file, exist=status) 
@@ -534,10 +532,8 @@ contains
         !end if
         call h5fcreate_f(hdf5file, H5F_ACC_TRUNC_F, file_id, hdferr)
         
-        ! Open file
-        CALL h5fopen_f(hdf5file, H5F_ACC_RDWR_F, file_id, hdferr)  
         if (hdferr /= 0) then
-            print *, "no HDF5 file"
+            print *, "Failed to create HDF5 result file"
             stop
         end if
         
@@ -566,6 +562,7 @@ contains
 
             ! ¹Ø±Õ
             call h5aclose_f(attr_id, hdferr)
+            call h5sclose_f(space_id, hdferr)
         end if
         
         !  Lb------------------------------------------------------
@@ -588,6 +585,7 @@ contains
         
             ! ¹Ø±Õ
             call h5aclose_f(attr_id, hdferr)
+            call h5sclose_f(space_id, hdferr)
         end if
         
         !  Lsv------------------------------------------------------
@@ -610,6 +608,7 @@ contains
         
             ! ¹Ø±Õ
             call h5aclose_f(attr_id, hdferr)
+            call h5sclose_f(space_id, hdferr)
         end if
         
         
@@ -618,10 +617,6 @@ contains
         !===============================
         call h5fclose_f(file_id, hdferr)
 
-        !===============================
-        ! close HDF5
-        !===============================
-        call h5close_f(hdferr)
         deallocate(dims)
     end subroutine
 !==========================================================================================================================

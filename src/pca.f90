@@ -1,4 +1,4 @@
-﻿module pca
+module pca
 !==================================
 !pca_module
 !In python, index begin at 0
@@ -217,7 +217,8 @@ contains
         call self.U0(matrix_U0)
         allocate(result_matrix(SIZE(U, 1), SIZE(matrix_inv_S_u, 1)))
         allocate(matrix(SIZE(U, 1), SIZE(U, 2)))
-        do concurrent (i = 1: SIZE(U, 1))
+        ! The iterations are independent and may use DO CONCURRENT with a compatible compiler.
+        do i = 1, SIZE(U, 1)
              matrix(i,:) = U(i,:) - matrix_U0(1,:)
         end do
         result_matrix = 0.0d0
@@ -238,7 +239,8 @@ contains
         result_matrix = 0.0d0
         call gemm(pcaU, matrix_S_u, result_matrix, 'N', 'T')
         
-        do concurrent (i = 1: SIZE(result_matrix, 1))
+        ! The iterations are independent and may use DO CONCURRENT with a compatible compiler.
+        do i = 1, SIZE(result_matrix, 1)
              result_matrix(i,:) = result_matrix(i,:) + matrix_U0(1, :)
         end do
         
@@ -304,7 +306,8 @@ contains
             
             norm_matrix = 0.0d0
             inverse_norm_matrix = 0.0d0
-            do concurrent (i = 1:2*Lu*(Lu+2))
+            ! The iterations are independent and may use DO CONCURRENT with a compatible compiler.
+            do i = 1, 2*Lu*(Lu+2)
                 norm_matrix(i, i) = 1.0d0
                 inverse_norm_matrix(i, i) = 1.0d0
             end do
@@ -344,7 +347,8 @@ contains
             next_index = i * (i + 2)
             
             norm_factor = sqrt(real(i * (i + 1), kind=8) / real(2 * i + 1, kind=8))
-            do concurrent (j = min_index+1: next_index)
+            ! The iterations are independent and may use DO CONCURRENT with a compatible compiler.
+            do j = min_index+1, next_index
                 norm_matrix(j, j) = norm_factor
                 norm_matrix(j + Nu, j + Nu) = norm_factor
                 inverse_norm_matrix(j, j) = 1.0d0 / norm_factor

@@ -142,7 +142,7 @@ contains
         integer :: max_degree, nb_coefs, nb_coefs_data, max_degree_data, i, j
         logical status
         INTEGER(HID_T) :: file, space, dset
-        INTEGER(HSIZE_T), allocatable :: dims(:)
+        INTEGER(HSIZE_T), allocatable :: dims(:), maxdims(:)
         integer :: rank, hdferr, i_d, match_idx, idx, current_No
         real(kind=8), allocatable :: dates(:), chaos_data(:,:), variance_data(:,:), matrix_temp(:,:)
         real(kind=8), allocatable :: dates_kalmag(:), real_data(:,:,:), matrix_temp2(:,:,:)
@@ -175,8 +175,6 @@ contains
         write(10,'(A,A,A,A)') "Observations ", TRIM(measure_type), " are read from ", TRIM(datadir)
         write(*,'(A,A,A,A)') "Observations ", TRIM(measure_type), " are read from ", TRIM(datadir)
         
-        ! Initialize FORTRAN interface.
-        CALL h5open_f(hdferr)
         
         ! Open file
         CALL h5fopen_f(trim(datadir), H5F_ACC_RDONLY_F, file, hdferr)
@@ -192,13 +190,14 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         
         ! Read the data   
         ALLOCATE(dates(dims(1)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, dates, dims, hdferr)
-        deallocate(dims)
+        deallocate(dims, maxdims)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         !===============================================================================
         
@@ -213,14 +212,15 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         
         ! Read the data   
         ALLOCATE(matrix_temp(dims(1), dims(2)), chaos_data(dims(2), dims(1)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, matrix_temp, dims, hdferr)
         chaos_data = TRANSPOSE(matrix_temp)
-        deallocate(dims, matrix_temp)
+        deallocate(dims, maxdims, matrix_temp)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         !===============================================================================
         
@@ -235,20 +235,20 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         
         ! Read the data   
         ALLOCATE(matrix_temp(dims(1), dims(2)), variance_data(dims(2), dims(1)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, matrix_temp, dims, hdferr)
         variance_data = TRANSPOSE(matrix_temp)
-        deallocate(dims, matrix_temp)
+        deallocate(dims, maxdims, matrix_temp)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         !===============================================================================
       
         ! Close file
         CALL h5fclose_f(file, hdferr)
-        CALL h5close_f(hdferr)
         
         !---------------------------------------------------------------------------
         nb_coefs_data = SIZE(chaos_data, 2)
@@ -272,8 +272,6 @@ contains
             stop
         end if
         
-        ! Initialize FORTRAN interface.
-        CALL h5open_f(hdferr)
         
         ! Open file
         CALL h5fopen_f(trim(datadir), H5F_ACC_RDONLY_F, file, hdferr)
@@ -289,13 +287,14 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         
         ! Read the data   
         ALLOCATE(dates_kalmag(dims(1)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, dates_kalmag, dims, hdferr)
-        deallocate(dims)
+        deallocate(dims, maxdims)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         !===============================================================================
         
@@ -310,8 +309,8 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         
         ! Read the data   
         ALLOCATE(matrix_temp2(dims(1), dims(2), dims(3)), real_data(dims(3), dims(2), dims(1)))
@@ -319,13 +318,13 @@ contains
         do i = 1, dims(1)
             real_data(:,:,i) = TRANSPOSE(matrix_temp2(i,:,:))
         end do
-        deallocate(dims, matrix_temp2)
+        deallocate(dims, maxdims, matrix_temp2)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         !===============================================================================
       
         ! Close file
         CALL h5fclose_f(file, hdferr)  
-        CALL h5close_f(hdferr)
         
         ! # Format the data as a dict of Observations with dates as keys
         allocate(obs_data(nb_realisations, nb_coefs), source=0.0d0)

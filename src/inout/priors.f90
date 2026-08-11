@@ -249,7 +249,7 @@ contains
         character(len=30) :: m, measure_fn
         character(len=200) :: path
         INTEGER(HID_T) :: file, space, dset
-        INTEGER(HSIZE_T), allocatable :: dims(:)
+        INTEGER(HSIZE_T), allocatable :: dims(:), maxdims(:)
         integer :: rank, hdferr
         real(kind=8), allocatable :: data_2(:,:), data_1(:)
         ! examine the measure---------------------------------------------------
@@ -268,8 +268,6 @@ contains
         
         ! Read the prior data---------------------------------------------------
         path = trim(data_directory) // '/' // 'Real.hdf5'
-        ! Initialize FORTRAN interface.
-        CALL h5open_f(hdferr)
         
         ! times==========================================================================
         ! Open file
@@ -285,13 +283,14 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         ! Read the data
         ALLOCATE(data_1(dims(1)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, data_1, dims, hdferr)
         times = data_1
-        deallocate(data_1, dims)
+        deallocate(data_1, dims, maxdims)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         CALL h5fclose_f(file, hdferr)
         !===============================================================================
@@ -311,15 +310,16 @@ contains
             CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
             ! Catch the dimensions of the dataset
-            ALLOCATE(dims(rank))
-            CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+            ALLOCATE(dims(rank), maxdims(rank))
+            CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
             ! Read the data
             ALLOCATE(data_2(dims(1), dims(2)))
             CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, data_2, dims, hdferr)
             
             MF = TRANSPOSE(data_2) * -1.0d0
-            deallocate(data_2, dims)
-            CALL h5dclose_f(dset, hdferr)
+            deallocate(data_2, dims, maxdims)
+            CALL h5sclose_f(space, hdferr)
+        CALL h5dclose_f(dset, hdferr)
             CALL h5fclose_f(file, hdferr)
         else
             ! Open the dataset
@@ -332,15 +332,16 @@ contains
             CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
             ! Catch the dimensions of the dataset
-            ALLOCATE(dims(rank))
-            CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+            ALLOCATE(dims(rank), maxdims(rank))
+            CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
             ! Read the data
             ALLOCATE(data_2(dims(1), dims(2)))
             CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, data_2, dims, hdferr)
             
             MF = TRANSPOSE(data_2)
-            deallocate(data_2, dims)
-            CALL h5dclose_f(dset, hdferr)
+            deallocate(data_2, dims, maxdims)
+            CALL h5sclose_f(space, hdferr)
+        CALL h5dclose_f(dset, hdferr)
             CALL h5fclose_f(file, hdferr)
         end if
         !===============================================================================
@@ -359,13 +360,14 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         ! Read the data
         ALLOCATE(data_2(dims(1), dims(2)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, data_2, dims, hdferr)
         U = TRANSPOSE(data_2)
-        deallocate(data_2, dims)
+        deallocate(data_2, dims, maxdims)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         CALL h5fclose_f(file, hdferr)
         !===============================================================================
@@ -384,16 +386,16 @@ contains
         CALL h5sget_simple_extent_ndims_f(space, rank, hdferr)
         
         ! Catch the dimensions of the dataset
-        ALLOCATE(dims(rank))
-        CALL h5sget_simple_extent_dims_f(space, dims, dims, hdferr)
+        ALLOCATE(dims(rank), maxdims(rank))
+        CALL h5sget_simple_extent_dims_f(space, dims, maxdims, hdferr)
         ! Read the data
         ALLOCATE(data_2(dims(1), dims(2)))
         CALL h5dread_f(dset, H5T_NATIVE_DOUBLE, data_2, dims, hdferr)
         ER = TRANSPOSE(data_2)
-        deallocate(data_2, dims)
+        deallocate(data_2, dims, maxdims)
+        CALL h5sclose_f(space, hdferr)
         CALL h5dclose_f(dset, hdferr)
         CALL h5fclose_f(file, hdferr)
-        CALL h5close_f(hdferr)
         !===============================================================================
         
         tag = TRIM(prior_type)

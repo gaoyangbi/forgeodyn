@@ -186,11 +186,13 @@ contains
         if (use_cholesky .AND. (info == 0)) then
             allocate(KT, source=transpose(PHT))
             call potrs(matrix_to_invert, KT, 'L',info)
+            if (info /= 0) error stop "POTRS failed while computing the Kalman gain"
             allocate(Kalman_gain, source=transpose(KT))
         else
             allocate(KT, source=transpose(PHT))
             allocate(ST, source=transpose(MATMUL(H, PHT) + R))
             call gesv(ST, KT, info=info)
+            if (info /= 0) error stop "GESV failed while computing the Kalman gain"
             allocate(Kalman_gain, source=transpose(KT))
         end if
         
@@ -472,7 +474,7 @@ contains
         real(kind=8), intent(in) :: cov_U(:,:), cov_ER(:,:)
         REAL(kind=8), intent(in) :: Tau_U, Tau_E
         real(kind=8), allocatable, intent(out) :: A(:,:), Chol(:,:)
-        integer :: Nu, Ner, Nz, i, j
+        integer :: Nu, Ner, Nz, i, j, info
         real(kind=8), allocatable :: matrix_tmp1(:,:), matrix_tmp2(:,:)
         real(kind=8), allocatable :: Chol_U(:,:), Chol_ER(:,:)
         
@@ -490,14 +492,16 @@ contains
         
         allocate(matrix_tmp1, source=cov_U)
         allocate(matrix_tmp2, source=cov_ER)
-        call potrf(matrix_tmp1, 'L')
+        call potrf(matrix_tmp1, 'L', info)
+        if (info /= 0) error stop "POTRF(cov_U) failed while building diagonal AR1 matrices"
         do j=1, SIZE(matrix_tmp1, 1)
             do concurrent (i=1:j-1)
                 matrix_tmp1(i,j) = 0.0d0
             end do
         end do
         
-        call potrf(matrix_tmp2, 'L')
+        call potrf(matrix_tmp2, 'L', info)
+        if (info /= 0) error stop "POTRF(cov_ER) failed while building diagonal AR1 matrices"
         do j=1, SIZE(matrix_tmp2, 1)
             do concurrent (i=1:j-1)
                 matrix_tmp2(i,j) = 0.0d0
@@ -586,7 +590,7 @@ contains
         class(container_type), intent(in) :: container(:)
         character(len=*), intent(in) :: AR_type
         real(kind=8), allocatable, intent(out) :: A(:,:), B(:,:), C(:,:), Chol(:,:)
-        integer :: i, NZ, NT_, Nt, j
+        integer :: i, NZ, NT_, Nt, j, info
         real(kind=8), allocatable :: tmp1(:,:), tmp2(:,:), X(:,:), dX(:,:), XXT(:,:), dXXT(:,:), tmp2_inv(:,:)
         real(kind=8), allocatable :: AA(:,:)
         real(kind=8) :: Dt, Mt
@@ -658,7 +662,8 @@ contains
             S = S / NT_
             allocate(Chol, source=S)
             allocate(A, source=AA)
-            call potrf(Chol, 'L')
+            call potrf(Chol, 'L', info)
+            if (info /= 0) error stop "POTRF failed while building dense AR1 matrices"
             do j=1, SIZE(Chol, 1)
                 do concurrent (i=1:j-1)
                     Chol(i,j) = 0.0d0
@@ -673,7 +678,8 @@ contains
             allocate(Chol(NZ, NZ))
             allocate(A(NZ, NZ), B(NZ, NZ), C(NZ, NZ))
             Chol = S(2*NZ+1:3*NZ, 2*NZ+1:3*NZ)
-            call potrf(Chol, 'L')
+            call potrf(Chol, 'L', info)
+            if (info /= 0) error stop "POTRF failed while building dense AR3 matrices"
             do j=1, SIZE(Chol, 1)
                 do concurrent (i=1:j-1)
                     Chol(i,j) = 0.0d0
